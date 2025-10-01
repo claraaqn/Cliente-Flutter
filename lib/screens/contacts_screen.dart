@@ -1,5 +1,6 @@
 import 'dart:developer' as console;
 
+import 'package:cliente/screens/chat_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cliente/providers/auth_provider.dart';
@@ -577,10 +578,13 @@ class _ContactsScreenState extends State<ContactsScreen> {
                     trailing: IconButton(
                       icon: const Icon(Icons.chat, color: Colors.blue),
                       onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                              content:
-                                  Text('Abrir chat com ${friend.username}')),
+                        // Navega para a tela de chat
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => ChatScreen(
+                              friend: friend,
+                            ),
+                          ),
                         );
                       },
                     ),
