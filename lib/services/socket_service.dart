@@ -23,6 +23,7 @@ class SocketService {
   // Timeout
   static const Duration defaultTimeout = Duration(seconds: 10);
 
+  //? handles
   Future<bool> connect() async {
     if (_isConnected) return true;
 
@@ -50,7 +51,6 @@ class SocketService {
     }
   }
 
-  /// Processa dados recebidos do servidor
   void _handleData(List<int> data) {
     try {
       final message = utf8.decode(data);
@@ -65,9 +65,11 @@ class SocketService {
         if (completeMessage.isNotEmpty) {
           try {
             final jsonData = json.decode(completeMessage);
+            _processRealTimeMessage(jsonData);
             _messageController.add(jsonData);
           } catch (e) {
-            console.log('⚠️ Erro ao decodificar JSON: $e\nMensagem: $completeMessage');
+            console.log(
+                '⚠️ Erro ao decodificar JSON: $e\nMensagem: $completeMessage');
           }
         }
       }
@@ -81,7 +83,26 @@ class SocketService {
     }
   }
 
-  /// Tratamento de erro no socket
+  void handleRealTimeNotifications(Map<String, dynamic> message) {
+    final action = message['action'];
+
+    switch (action) {
+      case 'friend_request':
+        console.log('🎯 Nova solicitação de amizade: ${message['message']}');
+        break;
+      case 'new_message':
+        console.log('📨 Nova mensagem recebida: ${message['content']}');
+        break;
+      case 'user_status_change':
+        console.log(
+            '🌐 Status alterado: ${message['username']} está ${message['is_online'] ? 'online' : 'offline'}');
+        break;
+      case 'user_typing':
+        console.log('✍️ ${message['username']} está digitando...');
+        break;
+    }
+  }
+
   void _handleError(dynamic error) {
     console.log('❌ Erro na conexão TCP: $error');
     _isConnected = false;
@@ -92,68 +113,12 @@ class SocketService {
     });
   }
 
-  /// Tratamento quando o socket é fechado
   void _handleDisconnect() {
     console.log('🔌 Conexão TCP fechada');
     _isConnected = false;
   }
 
-  /// Envia mensagem e aguarda resposta específica
-  Future<Map<String, dynamic>> _sendAndWaitForResponse(
-    Map<String, dynamic> message,
-    String expectedAction, {
-    Duration timeout = defaultTimeout,
-  }) async {
-    if (!_isConnected && !await connect()) {
-      return {
-        'success': false,
-        'message': 'Não foi possível conectar ao servidor TCP',
-      };
-    }
-
-    try {
-      final jsonMessage = json.encode(message) + '\n';
-      _socket!.write(jsonMessage);
-
-      final response = await _messageController.stream
-          .firstWhere(
-            (data) => data['action'] == expectedAction,
-            orElse: () => {
-              'action': 'timeout',
-              'success': false,
-              'message': 'Timeout na resposta do servidor',
-            },
-          )
-          .timeout(timeout);
-
-      return response;
-    } catch (e) {
-      return {'success': false, 'message': 'Erro ao enviar/receber: $e'};
-    }
-  }
-
-  /// Envia mensagem sem esperar resposta
-  void _sendMessageNow(Map<String, dynamic> message) {
-    if (_socket == null || !_isConnected) {
-      console.log('⚠️ Socket não disponível para envio');
-      return;
-    }
-
-    try {
-      final jsonMessage = json.encode(message);
-      console.log('📤 Enviando: $jsonMessage');
-      _socket!.add(utf8.encode('$jsonMessage\n'));
-    } catch (e) {
-      console.log('❌ Erro ao enviar mensagem: $e');
-      _messageController.add({
-        'action': 'error',
-        'message': 'Erro ao enviar mensagem: $e',
-        'success': false
-      });
-    }
-  }
-
-  /// Login no servidor
+  //? tudo aqui cunciona - autenticação
   Future<Map<String, dynamic>> login(String username, String password) async {
     final message = {
       'action': 'login',
@@ -163,12 +128,12 @@ class SocketService {
     final response = await _sendAndWaitForResponse(message, 'login_response');
     if (response['success'] == true) {
       _username = username;
-      _userId = response['data']?['user_id'].toString();;
+      _userId = response['data']?['user_id'].toString();
+      ;
     }
     return response;
   }
 
-  /// Registro de novo usuário
   Future<Map<String, dynamic>> registerUser(
       String username, String password) async {
     return _sendAndWaitForResponse(
@@ -181,36 +146,24 @@ class SocketService {
     );
   }
 
-  /// Envio de mensagens
-  void sendMessage(Map<String, dynamic> message) {
-    if (!_isConnected) {
-      console.log('⚠️ Não conectado ao servidor. Tentando conectar...');
-      connect().then((connected) {
-        if (connected) {
-          _sendMessageNow(message);
-        } else {
-          console.log('❌ Falha ao conectar para enviar mensagem');
-          _messageController.add({
-            'action': 'error',
-            'message': 'Não foi possível conectar ao servidor',
-            'success': false
-          });
-        }
-      });
-    } else {
-      _sendMessageNow(message);
+  Future<Map<String, dynamic>> logout() async {
+    final response = await _sendAndWaitForResponse(
+      {
+        'action': 'logout',
+      },
+      'logout_response',
+    );
+
+    if (response['success'] == true) {
+      _userId = null;
+      _username = null;
+      console.log('👤 Usuário deslogado');
     }
+
+    return response;
   }
 
-  /// Envio + espera resposta customizada
-  Future<Map<String, dynamic>> sendAndWaitForResponse(
-    Map<String, dynamic> message,
-    String expectedResponseType,
-  ) async {
-    return _sendAndWaitForResponse(message, expectedResponseType);
-  }
-
-  /// Métodos de amizade
+  //? funciona - amizade
   Future<Map<String, dynamic>> sendFriendRequest(String friendUsername) async {
     return _sendAndWaitForResponse(
       {
@@ -254,7 +207,171 @@ class SocketService {
     );
   }
 
-  /// Autenticação
+  //! Envia mensagem
+  Future<Map<String, dynamic>> sendMessage(
+      String receiverUsername, String content) async {
+    if (!_isAuthenticated()) {
+      return {'success': false, 'message': 'Usuário não autenticado'};
+    }
+    if (receiverUsername.isEmpty) {
+      return {'success': false, 'message': 'Destinatário inválido'};
+    }
+    if (content.isEmpty) {
+      return {'success': false, 'message': 'Mensagem vazia'};
+    }
+
+    console.log('💬 Enviando mensagem para $receiverUsername: $content');
+
+    return _sendAndWaitForResponse(
+      {
+        'action': 'send_message',
+        'receiver_username': receiverUsername,
+        'content': content,
+        'sender_id': _userId,
+        'sender_username': _username,
+        'timestamp': DateTime.now().toIso8601String(),
+      },
+      'send_message_response',
+    );
+  }
+
+  Future<Map<String, dynamic>> _sendAndWaitForResponse(
+    Map<String, dynamic> message,
+    String expectedAction, {
+    Duration timeout = defaultTimeout,
+  }) async {
+    if (!_isConnected && !await connect()) {
+      return {
+        'success': false,
+        'message': 'Não foi possível conectar ao servidor TCP',
+      };
+    }
+
+    try {
+      final jsonMessage = json.encode(message) + '\n';
+      _socket!.write(jsonMessage);
+
+      final response = await _messageController.stream
+          .firstWhere(
+            (data) => data['action'] == expectedAction,
+            orElse: () => {
+              'action': 'timeout',
+              'success': false,
+              'message': 'Timeout na resposta do servidor',
+            },
+          )
+          .timeout(timeout);
+
+      return response;
+    } catch (e) {
+      return {'success': false, 'message': 'Erro ao enviar/receber: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> sendAndWaitForResponse(
+    Map<String, dynamic> message,
+    String expectedResponseType,
+  ) async {
+    return _sendAndWaitForResponse(message, expectedResponseType);
+  }
+
+  Future<Map<String, dynamic>> sendMessageToUser(
+      String receiverUsername, String content) async {
+    if (!_isAuthenticated()) {
+      return {'success': false, 'message': 'Usuário não autenticado'};
+    }
+    if (receiverUsername.isEmpty) {
+      return {'success': false, 'message': 'Destinatário inválido'};
+    }
+    if (content.isEmpty) {
+      return {'success': false, 'message': 'Mensagem vazia'};
+    }
+
+    console.log('💬 Enviando mensagem para $receiverUsername: $content');
+
+    return _sendAndWaitForResponse(
+      {
+        'action': 'send_message',
+        'receiver_username': receiverUsername,
+        'content': content,
+        'sender_id': _userId,
+        'sender_username': _username,
+        'timestamp': DateTime.now().toIso8601String(),
+      },
+      'send_message_response',
+    );
+  }
+
+  Future<Map<String, dynamic>> getUndeliveredMessages() async {
+    if (!_isAuthenticated()) {
+      return {'success': false, 'message': 'Usuário não autenticado'};
+    }
+    return _sendAndWaitForResponse(
+      {
+        'action': 'get_undelivered_messages',
+      },
+      'get_undelivered_messages_response',
+    );
+  }
+
+  Future<Map<String, dynamic>> getConversationHistory(String otherUserId,
+      {int limit = 50}) async {
+    if (!_isAuthenticated()) {
+      return {'success': false, 'message': 'Usuário não autenticado'};
+    }
+
+    return _sendAndWaitForResponse(
+      {
+        'action': 'get_conversation_history',
+        'other_user_id': otherUserId,
+        'limit': limit,
+      },
+      'get_conversation_history_response',
+    );
+  }
+
+  Future<Map<String, dynamic>> getContacts() async {
+    if (!_isAuthenticated()) {
+      return {'success': false, 'message': 'Usuário não autenticado'};
+    }
+    return _sendAndWaitForResponse(
+      {
+        'action': 'get_contacts',
+      },
+      'get_contacts_response',
+    );
+  }
+
+  void _processRealTimeMessage(Map<String, dynamic> message) {
+    final action = message['action'];
+
+    if (action == 'new_message') {
+      console
+          .log('🔔 Nova mensagem em tempo real via TCP: ${message['content']}');
+    } else if (action == 'user_typing') {
+      console.log(
+          '✍️ Indicador de digitação via TCP: ${message['username']} está ${message['is_typing'] ? 'digitando' : 'parou'}');
+    }
+  }
+
+  //! digitação
+  void sendTypingStart(String receiverUsername) {
+    if (!_isAuthenticated()) return;
+    _sendMessageNow({
+      'action': 'typing_start',
+      'receiver_username': receiverUsername,
+    });
+  }
+
+  void sendTypingStop(String receiverUsername) {
+    if (!_isAuthenticated()) return;
+    _sendMessageNow({
+      'action': 'typing_stop',
+      'receiver_username': receiverUsername,
+    });
+  }
+
+  //?auxiliares - ok até onde eu sei
   bool _isAuthenticated() {
     if (_userId == null) {
       console.log('⚠️ Ação requer autenticação. Faça login primeiro.');
@@ -263,11 +380,29 @@ class SocketService {
     return true;
   }
 
-  /// Getter stream para UI ouvir mensagens
+  void _sendMessageNow(Map<String, dynamic> message) {
+    if (_socket == null || !_isConnected) {
+      console.log('⚠️ Socket não disponível para envio');
+      return;
+    }
+
+    try {
+      final jsonMessage = json.encode(message);
+      console.log('📤 Enviando: $jsonMessage');
+      _socket!.add(utf8.encode('$jsonMessage\n'));
+    } catch (e) {
+      console.log('❌ Erro ao enviar mensagem: $e');
+      _messageController.add({
+        'action': 'error',
+        'message': 'Erro ao enviar mensagem: $e',
+        'success': false
+      });
+    }
+  }
+
   Stream<Map<String, dynamic>> get messageStream => _messageController.stream;
   bool get isConnected => _isConnected;
 
-  /// Desconecta
   void disconnect() {
     _socket?.close();
     _isConnected = false;

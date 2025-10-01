@@ -72,8 +72,8 @@ class AuthProvider with ChangeNotifier {
 
       if (response['success'] == true) {
         _isLoggedIn = true;
-        _userId = response['user_id'];
-        _username = username;
+        _userId = response['data']['user_id'];
+        _username = response['data']['username'];
         _errorMessage = '';
         notifyListeners();
         return true;

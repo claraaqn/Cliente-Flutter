@@ -1,4 +1,4 @@
-import 'dart:async' show StreamController;
+import 'dart:async' show StreamController, Completer;
 import 'dart:convert';
 import 'dart:developer' as console;
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -8,12 +8,17 @@ class WebSocketService {
   final StreamController<Map<String, dynamic>> _messageController =
       StreamController<Map<String, dynamic>>.broadcast();
 
-  static const String serverUrl = 'ws://localhost:8080';
+  static const String serverUrl =
+      'ws://localhost:8080'; //? onde vai chamar no servidor
 
   bool _isConnected = false;
   String? _userId;
   String? _username;
 
+  // Controlador para respostas específicas
+  final Map<String, Completer<Map<String, dynamic>>> _responseCompleters = {};
+
+  //?handles
   Future<bool> connect() async {
     if (_isConnected) return true;
 
@@ -43,9 +48,10 @@ class WebSocketService {
       final message = json.decode(data);
       console.log('📥 Mensagem recebida: $message');
 
-      // Trata diferentes tipos de notificações em tempo real
+      // Apenas trata notificações em tempo real
       _handleRealTimeNotifications(message);
 
+      // Todas as mensagens vão para o stream (incluindo respostas)
       _messageController.add(message);
     } catch (e) {
       console.log('❌ Erro ao decodificar mensagem: $e, dados: $data');
@@ -75,6 +81,15 @@ class WebSocketService {
   void _handleError(dynamic error) {
     console.log('❌ Erro na conexão WebSocket: $error');
     _isConnected = false;
+
+    // Completa todos os completers pendentes com erro
+    _responseCompleters.forEach((key, completer) {
+      if (!completer.isCompleted) {
+        completer
+            .complete({'success': false, 'message': 'Erro de conexão: $error'});
+      }
+    });
+
     _messageController.add({
       'action': 'error',
       'message': 'Erro de conexão WebSocket: $error',
@@ -85,10 +100,21 @@ class WebSocketService {
   void _handleDisconnect() {
     console.log('🔌 Conexão WebSocket fechada');
     _isConnected = false;
+
+    // Completa todos os completers pendentes com erro de desconexão
+    _responseCompleters.forEach((key, completer) {
+      if (!completer.isCompleted) {
+        completer.complete({'success': false, 'message': 'Conexão fechada'});
+      }
+    });
+
+    _responseCompleters.clear();
+
     _userId = null;
     _username = null;
   }
 
+//? tudo aqui cunciona - autenticação
   Future<Map<String, dynamic>> registerUser(
       String username, String password) async {
     return _sendAndWaitForResponse(
@@ -137,6 +163,7 @@ class WebSocketService {
     return response;
   }
 
+//? funciona - amizade
   Future<Map<String, dynamic>> sendFriendRequest(String friendUsername) async {
     if (!_isAuthenticated()) {
       return {'success': false, 'message': 'Usuário não autenticado'};
@@ -193,21 +220,95 @@ class WebSocketService {
     );
   }
 
-  // ============ MÉTODOS DE MENSAGENS ============
+  //? mensagens
   Future<Map<String, dynamic>> sendMessage(
       String receiverUsername, String content) async {
     if (!_isAuthenticated()) {
       return {'success': false, 'message': 'Usuário não autenticado'};
     }
 
+    if (receiverUsername.isEmpty) {
+      return {'success': false, 'message': 'Destinatário inválido'};
+    }
+
+    if (content.isEmpty) {
+      return {'success': false, 'message': 'Mensagem vazia'};
+    }
+
+    console.log('💬 Enviando mensagem para $receiverUsername: $content');
+
     return _sendAndWaitForResponse(
       {
         'action': 'send_message',
         'receiver_username': receiverUsername,
         'content': content,
+        'sender_id': _userId,
+        'sender_username': _username,
+        'timestamp': DateTime.now().toIso8601String(),
       },
       'send_message_response',
     );
+  }
+
+  Future<Map<String, dynamic>> _sendAndWaitForResponse(
+    Map<String, dynamic> message,
+    String expectedResponseType,
+  ) async {
+    if (!_isConnected) {
+      final connected = await connect();
+      if (!connected) {
+        return {
+          'success': false,
+          'message': 'Não foi possível conectar ao servidor',
+        };
+      }
+    }
+
+    if (_channel == null) {
+      return {
+        'success': false,
+        'message': 'Conexão WebSocket não disponível',
+      };
+    }
+
+    try {
+      final jsonMessage = json.encode(message);
+      console.log('📤 Enviando mensagem: $jsonMessage');
+      console.log('🔍 Esperando resposta do tipo: $expectedResponseType');
+
+      _channel!.sink.add(jsonMessage);
+
+      // Cria um stream temporário para debug
+      final subscription = _messageController.stream.listen((data) {
+        console.log('👀 Mensagem recebida no stream: $data');
+        console.log('🔍 Comparando com esperado: $expectedResponseType');
+        console.log('📊 Tem action?: ${data.containsKey('action')}');
+        console.log('📊 Action value: ${data['action']}');
+        console.log('📊 Tem success?: ${data.containsKey('success')}');
+        console.log('📊 Success value: ${data['success']}');
+      });
+
+      final response = await _messageController.stream.firstWhere(
+        (data) {
+          console.log('🔍 Analisando mensagem: $data');
+          console.log('🎯 Esperado: $expectedResponseType');
+          console.log('📨 Recebido action: ${data['action']}');
+
+          final isMatch = data['action'] == expectedResponseType ||
+              data.containsKey('success');
+
+          console.log('✅ É match?: $isMatch');
+          return isMatch;
+        },
+      ).timeout(const Duration(seconds: 10));
+
+      await subscription.cancel();
+      console.log('📥 Resposta recebida: $response');
+      return response;
+    } catch (e) {
+      console.log('❌ Erro ao enviar mensagem: $e');
+      return {'success': false, 'message': 'Erro: $e'};
+    }
   }
 
   Future<Map<String, dynamic>> getUndeliveredMessages() async {
@@ -252,6 +353,7 @@ class WebSocketService {
     );
   }
 
+  //? digitação
   void sendTypingStart(String receiverUsername) {
     if (!_isAuthenticated()) return;
 
@@ -270,52 +372,13 @@ class WebSocketService {
     });
   }
 
+  //?auxiliares - ok até onde eu sei
   bool _isAuthenticated() {
     if (_userId == null) {
       console.log('⚠️ Ação requer autenticação. Faça login primeiro.');
       return false;
     }
     return true;
-  }
-
-  Future<Map<String, dynamic>> _sendAndWaitForResponse(
-    Map<String, dynamic> message,
-    String expectedResponseType,
-  ) async {
-    if (!_isConnected) {
-      final connected = await connect();
-      if (!connected) {
-        return {
-          'success': false,
-          'message': 'Não foi possível conectar ao servidor',
-        };
-      }
-    }
-
-    try {
-      final jsonMessage = json.encode(message);
-      console.log('📤 Enviando mensagem: $jsonMessage');
-
-      _channel!.sink.add(jsonMessage);
-
-      final response = await _messageController.stream
-          .firstWhere(
-            (data) =>
-                data['action'] == expectedResponseType ||
-                data['success'] != null,
-            orElse: () => {
-              'success': false,
-              'message': 'Timeout na resposta do servidor',
-            },
-          )
-          .timeout(const Duration(seconds: 10));
-
-      console.log('📥 Resposta recebida: $response');
-      return response;
-    } catch (e) {
-      console.log('❌ Erro ao enviar mensagem: $e');
-      return {'success': false, 'message': 'Erro: $e'};
-    }
   }
 
   void _sendMessageNow(Map<String, dynamic> message) {
@@ -343,6 +406,7 @@ class WebSocketService {
     _isConnected = false;
     _userId = null;
     _username = null;
+    _responseCompleters.clear();
     _messageController.close();
     console.log('🔌 WebSocketService desconectado');
   }
