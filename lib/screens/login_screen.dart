@@ -1,3 +1,4 @@
+import 'package:cliente/database_helper.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cliente/providers/auth_provider.dart';
@@ -21,7 +22,6 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void initState() {
     super.initState();
-    // Inicializa a conexão com o servidor sem rebuild desnecessário
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       authProvider.initialize();
@@ -46,6 +46,8 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   void _showErrorSnackBar(String message) {
+    if (!mounted) return;
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
@@ -56,22 +58,44 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _login(BuildContext context) async {
-    if (_formKey.currentState!.validate()) {
-      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    if (!_formKey.currentState!.validate()) return;
 
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = '';
+    });
+
+    try {
       final success = await authProvider.login(
         _usernameController.text.trim(),
         _passwordController.text.trim(),
       );
 
-      if (success) {
-        // Navega para a tela de contatos
+      if (success && mounted) {
+        final username = _usernameController.text.trim();
+        await DatabaseHelper.instance.initForUser(username);
+
+        debugPrint(
+            'Banco inicializado para $username - Navegando para ContactsScreen');
+
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const ContactsScreen()),
         );
-      } else {
+      } else if (mounted) {
         _showErrorSnackBar(authProvider.errorMessage);
+      }
+    } catch (e) {
+      if (mounted) {
+        _showErrorSnackBar('Erro durante o login: $e');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
       }
     }
   }
@@ -97,17 +121,13 @@ class _LoginScreenState extends State<LoginScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Logo
               const Icon(Icons.chat, size: 80, color: Colors.blue),
               const SizedBox(height: 20),
-
               const Text(
                 'Sistema de Chat',
                 style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 30),
-
-              // Campo Username
               TextFormField(
                 controller: _usernameController,
                 decoration: const InputDecoration(
@@ -123,8 +143,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 },
               ),
               const SizedBox(height: 20),
-
-              // Campo Password
               TextFormField(
                 controller: _passwordController,
                 obscureText: true,
@@ -141,8 +159,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 },
               ),
               const SizedBox(height: 30),
-
-              // Botão Login
               if (_isLoading)
                 const CircularProgressIndicator()
               else
@@ -153,10 +169,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   child: const Text('Entrar'),
                 ),
-
               const SizedBox(height: 20),
-
-              // Botão Registrar
               OutlinedButton(
                 onPressed: () => _navigateToRegister(context),
                 style: OutlinedButton.styleFrom(
@@ -164,8 +177,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 child: const Text('Criar Nova Conta'),
               ),
-
-              // Mensagem de erro
               if (_errorMessage.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 20),

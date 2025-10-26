@@ -7,7 +7,6 @@ class AuthProvider with ChangeNotifier {
   late dynamic _socketService;
 
   AuthProvider() {
-    // Usa a factory para criar o serviço apropriado
     _socketService = SocketServiceFactory.createSocketService();
     log('✅ AuthProvider inicializado com: ${_socketService.runtimeType}');
   }
@@ -23,6 +22,10 @@ class AuthProvider with ChangeNotifier {
   int? get userId => _userId;
   String? get username => _username;
   dynamic get socketService => _socketService;
+
+  Future<void> sendMessage(String receiver, String content) async {
+    await _socketService.sendMessage(receiver, content);
+  }
 
   Future<void> initialize() async {
     try {

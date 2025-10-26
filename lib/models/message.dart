@@ -7,6 +7,8 @@ class Message {
   final bool isDelivered;
   final bool isMine;
   final bool hasError;
+  final String? localId;
+  final bool isSentToServer; 
 
   Message({
     this.id,
@@ -17,10 +19,11 @@ class Message {
     this.isDelivered = false,
     this.isMine = false,
     this.hasError = false,
+    this.localId, 
+    this.isSentToServer = false,
   });
 
   factory Message.fromJson(Map<String, dynamic> json) {
-    // Funções auxiliares para conversão segura
     int? safeParseInt(dynamic value) {
       if (value == null) return null;
       if (value is int) return value;
@@ -63,9 +66,11 @@ class Message {
       id: safeParseInt(json['id']),
       senderId: safeParseInt(json['sender_id']) ?? 0,
       receiverId: safeParseInt(json['receiver_id']) ?? 0,
-      content: safeParseString(json['content']), // CORREÇÃO AQUI
+      content: safeParseString(json['content']),
       timestamp: safeParseDateTime(json['timestamp']),
       isDelivered: safeParseBool(json['is_delivered'] ?? true),
+      localId: safeParseString(json['local_id']), 
+      isSentToServer: safeParseBool(json['is_sent_to_server'] ?? false),
     );
   }
 
@@ -77,6 +82,8 @@ class Message {
       'content': content,
       'timestamp': timestamp.toIso8601String(),
       'is_delivered': isDelivered,
+      'local_id': localId,
+      'is_sent_to_server': isSentToServer, 
     };
   }
 
@@ -89,6 +96,8 @@ class Message {
     bool? isDelivered,
     bool? isMine,
     bool? hasError,
+    String? localId,
+    bool? isSentToServer, 
   }) {
     return Message(
       id: id ?? this.id,
@@ -99,6 +108,8 @@ class Message {
       isDelivered: isDelivered ?? this.isDelivered,
       isMine: isMine ?? this.isMine,
       hasError: hasError ?? this.hasError,
+      localId: localId ?? this.localId,
+      isSentToServer: isSentToServer ?? this.isSentToServer,
     );
   }
 }
