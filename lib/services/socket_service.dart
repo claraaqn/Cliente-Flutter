@@ -1,7 +1,8 @@
-import 'dart:developer' as console;
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
+import 'package:flutter/widgets.dart';
+import 'package:cliente/services/local_storage_service.dart';
 
 class SocketService {
   Socket? _socket;
@@ -23,9 +24,15 @@ class SocketService {
   // Timeout
   static const Duration defaultTimeout = Duration(seconds: 10);
 
+  final LocalStorageService _localStorage = LocalStorageService();
+
   //? handles
   Future<bool> connect() async {
     if (_isConnected) return true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      checkPendingMessages();
+    });
 
     try {
       _socket = await Socket.connect(
@@ -42,10 +49,10 @@ class SocketService {
         cancelOnError: true,
       );
 
-      console.log('✅ Conectado ao servidor TCP em $serverHost:$serverPort');
+      debugPrint('✅ Conectado ao servidor TCP em $serverHost:$serverPort');
       return true;
     } catch (e) {
-      console.log('❌ Erro ao conectar via TCP: $e');
+      debugPrint('❌ Erro ao conectar via TCP: $e');
       _isConnected = false;
       return false;
     }
@@ -68,7 +75,7 @@ class SocketService {
             _processRealTimeMessage(jsonData);
             _messageController.add(jsonData);
           } catch (e) {
-            console.log(
+            debugPrint(
                 '⚠️ Erro ao decodificar JSON: $e\nMensagem: $completeMessage');
           }
         }
@@ -79,7 +86,7 @@ class SocketService {
         ..clear()
         ..write(messages.last);
     } catch (e) {
-      console.log('❌ Erro ao processar dados: $e');
+      debugPrint('❌ Erro ao processar dados: $e');
     }
   }
 
@@ -88,23 +95,23 @@ class SocketService {
 
     switch (action) {
       case 'friend_request':
-        console.log('🎯 Nova solicitação de amizade: ${message['message']}');
+        debugPrint('🎯 Nova solicitação de amizade: ${message['message']}');
         break;
       case 'new_message':
-        console.log('📨 Nova mensagem recebida: ${message['content']}');
+        debugPrint('📨 Nova mensagem recebida: ${message['content']}');
         break;
       case 'user_status_change':
-        console.log(
+        debugPrint(
             '🌐 Status alterado: ${message['username']} está ${message['is_online'] ? 'online' : 'offline'}');
         break;
       case 'user_typing':
-        console.log('✍️ ${message['username']} está digitando...');
+        debugPrint('✍️ ${message['username']} está digitando...');
         break;
     }
   }
 
   void _handleError(dynamic error) {
-    console.log('❌ Erro na conexão TCP: $error');
+    debugPrint('❌ Erro na conexão TCP: $error');
     _isConnected = false;
     _messageController.add({
       'action': 'error',
@@ -114,7 +121,7 @@ class SocketService {
   }
 
   void _handleDisconnect() {
-    console.log('🔌 Conexão TCP fechada');
+    debugPrint('🔌 Conexão TCP fechada');
     _isConnected = false;
   }
 
@@ -157,7 +164,7 @@ class SocketService {
     if (response['success'] == true) {
       _userId = null;
       _username = null;
-      console.log('👤 Usuário deslogado');
+      debugPrint('👤 Usuário deslogado');
     }
 
     return response;
@@ -213,25 +220,179 @@ class SocketService {
     if (!_isAuthenticated()) {
       return {'success': false, 'message': 'Usuário não autenticado'};
     }
-    if (receiverUsername.isEmpty) {
-      return {'success': false, 'message': 'Destinatário inválido'};
-    }
-    if (content.isEmpty) {
-      return {'success': false, 'message': 'Mensagem vazia'};
+
+    if (receiverUsername.isEmpty || content.isEmpty) {
+      return {'success': false, 'message': 'Dados inválidos'};
     }
 
-    console.log('💬 Enviando mensagem para $receiverUsername: $content');
+    debugPrint('💬 Enviando mensagem para $receiverUsername: $content');
+
+    final localId = 'local_${DateTime.now().millisecondsSinceEpoch}_${_userId}';
+    final messageData = {
+      'sender_id': _userId,
+      'sender_username': _username,
+      'receiver_username': receiverUsername,
+      'content': content,
+      'timestamp': DateTime.now().toIso8601String(),
+      'local_id': localId,
+    };
+
+    await _localStorage.saveMessageLocally(messageData);
+    debugPrint('💾 Mensagem salva localmente: $localId');
+
+    try {
+      final response = await _sendAndWaitForResponse(
+        {
+          'action': 'send_message',
+          'receiver_username': receiverUsername,
+          'content': content,
+          'sender_id': _userId,
+          'sender_username': _username,
+          'timestamp': DateTime.now().toIso8601String(),
+          'local_id': localId,
+        },
+        'send_message_response',
+      );
+
+      if (response['success'] == true) {
+        final messageId = response['data']['message_id'];
+        final isOffline = response['data']['is_offline'] == true;
+
+        if (messageId != null) {
+          await _localStorage.markMessageAsSent(localId, messageId);
+        }
+
+        debugPrint(isOffline
+            ? '💾 Mensagem salva no servidor (destinatário offline)'
+            : '✅ Mensagem entregue em tempo real');
+      }
+
+      return response;
+    } catch (e) {
+      debugPrint('❌ Erro ao enviar mensagem: $e');
+      return {
+        'success': false,
+        'message': 'Mensagem salva localmente, erro no envio',
+        'local_id': localId,
+      };
+    }
+  }
+
+  Future<void> checkPendingMessages() async {
+    if (!_isAuthenticated() || !_isConnected) return;
+
+    try {
+      debugPrint('🔄 Verificando mensagens pendentes no servidor...');
+
+      final response = await _sendAndWaitForResponse(
+        {
+          'action': 'get_pending_messages',
+        },
+        'get_pending_messages_response',
+      );
+
+      if (response['success'] == true) {
+        final pendingMessages = response['data'] ?? [];
+        debugPrint(
+            '📨 ${pendingMessages.length} mensagens pendentes recebidas');
+
+        for (final message in pendingMessages) {
+          debugPrint('📨 Processando mensagem pendente: ${message['content']}');
+
+          final newMessage = {
+            'action': 'new_message',
+            'id': message['id'],
+            'sender_id': message['sender_id'],
+            'receiver_id': message['receiver_id'],
+            'content': message['content'],
+            'timestamp': message['timestamp'],
+            'is_delivered': true,
+          };
+
+          debugPrint('🎯 Enviando para ChatScreen: ${newMessage['content']}');
+
+          _messageController.add(newMessage);
+
+          try {
+            await _sendAndWaitForResponse(
+              {
+                'action': 'confirm_message_delivery',
+                'message_id': message['id'],
+              },
+              'confirm_delivery_response',
+            );
+            debugPrint('✅ Mensagem ${message['id']} confirmada');
+          } catch (e) {
+            debugPrint('❌ Erro ao confirmar entrega: $e');
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ Erro ao verificar mensagens pendentes: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>> getConversationHistory(String otherUsername,
+      {int limit = 50}) async {
+    if (!_isAuthenticated()) {
+      return {'success': false, 'message': 'Usuário não autenticado'};
+    }
+
+    final localHistory = await _localStorage.getLocalConversationHistory(
+      otherUsername,
+      limit,
+    );
+
+    try {
+      final serverResponse = await _sendAndWaitForResponse(
+        {
+          'action': 'get_conversation_history',
+          'other_username': otherUsername,
+          'limit': limit,
+        },
+        'get_conversation_history_response',
+      );
+
+      if (serverResponse['success'] == true) {
+        final serverMessages = serverResponse['data'] ?? [];
+
+        for (final message in serverMessages) {
+          await _localStorage.saveReceivedMessage(message);
+        }
+
+        final allMessages = [...localHistory, ...serverMessages];
+        allMessages.sort((a, b) => DateTime.parse(a['timestamp'])
+            .compareTo(DateTime.parse(b['timestamp'])));
+
+        return {
+          'success': true,
+          'data': allMessages.take(limit).toList(),
+          'source': 'combined',
+        };
+      }
+    } catch (e) {
+      debugPrint('⚠️ Usando apenas histórico local: $e');
+    }
+
+    return {
+      'success': true,
+      'data': localHistory,
+      'source': 'local_only',
+    };
+  }
+
+  Future<Map<String, dynamic>> cleanupDeliveredMessages(
+      String otherUsername) async {
+    if (!_isAuthenticated()) {
+      return {'success': false, 'message': 'Usuário não autenticado'};
+    }
 
     return _sendAndWaitForResponse(
       {
-        'action': 'send_message',
-        'receiver_username': receiverUsername,
-        'content': content,
-        'sender_id': _userId,
-        'sender_username': _username,
-        'timestamp': DateTime.now().toIso8601String(),
+        'action': 'cleanup_delivered_messages',
+        'other_username': otherUsername,
       },
-      'send_message_response',
+      'cleanup_messages_response',
     );
   }
 
@@ -275,83 +436,76 @@ class SocketService {
     return _sendAndWaitForResponse(message, expectedResponseType);
   }
 
-  Future<Map<String, dynamic>> sendMessageToUser(
-      String receiverUsername, String content) async {
-    if (!_isAuthenticated()) {
-      return {'success': false, 'message': 'Usuário não autenticado'};
-    }
-    if (receiverUsername.isEmpty) {
-      return {'success': false, 'message': 'Destinatário inválido'};
-    }
-    if (content.isEmpty) {
-      return {'success': false, 'message': 'Mensagem vazia'};
-    }
-
-    console.log('💬 Enviando mensagem para $receiverUsername: $content');
-
-    return _sendAndWaitForResponse(
-      {
-        'action': 'send_message',
-        'receiver_username': receiverUsername,
-        'content': content,
-        'sender_id': _userId,
-        'sender_username': _username,
-        'timestamp': DateTime.now().toIso8601String(),
-      },
-      'send_message_response',
-    );
-  }
-
-  Future<Map<String, dynamic>> getUndeliveredMessages() async {
-    if (!_isAuthenticated()) {
-      return {'success': false, 'message': 'Usuário não autenticado'};
-    }
-    return _sendAndWaitForResponse(
-      {
-        'action': 'get_undelivered_messages',
-      },
-      'get_undelivered_messages_response',
-    );
-  }
-
-  Future<Map<String, dynamic>> getConversationHistory(String otherUserId,
-      {int limit = 50}) async {
-    if (!_isAuthenticated()) {
-      return {'success': false, 'message': 'Usuário não autenticado'};
-    }
-
-    return _sendAndWaitForResponse(
-      {
-        'action': 'get_conversation_history',
-        'other_user_id': otherUserId,
-        'limit': limit,
-      },
-      'get_conversation_history_response',
-    );
-  }
-
-  Future<Map<String, dynamic>> getContacts() async {
-    if (!_isAuthenticated()) {
-      return {'success': false, 'message': 'Usuário não autenticado'};
-    }
-    return _sendAndWaitForResponse(
-      {
-        'action': 'get_contacts',
-      },
-      'get_contacts_response',
-    );
-  }
-
   void _processRealTimeMessage(Map<String, dynamic> message) {
     final action = message['action'];
 
+    debugPrint('🔔 Mensagem recebida no cliente: $message');
+
     if (action == 'new_message') {
-      console
-          .log('🔔 Nova mensagem em tempo real via TCP: ${message['content']}');
+      debugPrint(
+          '🔔 Nova mensagem em tempo real. De: ${message['sender_username']}. Para: ${message['receiver_username']}');
+
+      if (message['receiver_username'] == _username) {
+        debugPrint('✅ Mensagem é para este usuário');
+
+        _messageController.add(message);
+        debugPrint('✅ Nova mensagem enviada para o stream: ${message['id']}');
+
+        _saveMessageLocallyIfNeeded(message);
+      } else {
+        debugPrint('❌ Mensagem não é para este usuário');
+      }
     } else if (action == 'user_typing') {
-      console.log(
-          '✍️ Indicador de digitação via TCP: ${message['username']} está ${message['is_typing'] ? 'digitando' : 'parou'}');
+      debugPrint(
+          '✍️ ${message['username']} está ${message['is_typing'] ? 'digitando' : 'parou'}');
+      _messageController.add(message);
+    } else if (action == 'user_online_status') {
+      debugPrint(
+          '🟢 Status online: ${message['username']} - ${message['is_online']}');
+      _messageController.add(message);
     }
+  }
+
+  Future<void> _saveMessageLocallyIfNeeded(Map<String, dynamic> message) async {
+    try {
+      final messageId = message['id'];
+
+      final existingMessages = await _localStorage.getLocalConversationHistory(
+        message['sender_username'],
+        100,
+      );
+
+      final isDuplicate =
+          existingMessages.any((msg) => msg['server_id'] == messageId);
+
+      if (!isDuplicate) {
+        await _localStorage.saveReceivedMessage(message);
+        debugPrint('💾 Mensagem em tempo real salva localmente: $messageId');
+      } else {
+        debugPrint('💾 Mensagem em tempo real duplicada ignorada: $messageId');
+      }
+    } catch (e) {
+      debugPrint('❌ Erro ao salvar mensagem localmente: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>> checkUserOnlineStatus(String username) async {
+    if (!_isAuthenticated()) {
+      return {'success': false, 'message': 'Usuário não autenticado'};
+    }
+    if (username.isEmpty) {
+      return {'success': false, 'message': 'Username é obrigatório'};
+    }
+
+    debugPrint('🔍 Verificando status online de: $username');
+
+    return _sendAndWaitForResponse(
+      {
+        'action': 'check_user_online_status',
+        'username': username,
+      },
+      'user_online_status_response',
+    );
   }
 
   //! digitação
@@ -374,7 +528,7 @@ class SocketService {
   //?auxiliares - ok até onde eu sei
   bool _isAuthenticated() {
     if (_userId == null) {
-      console.log('⚠️ Ação requer autenticação. Faça login primeiro.');
+      debugPrint('⚠️ Ação requer autenticação. Faça login primeiro.');
       return false;
     }
     return true;
@@ -382,16 +536,16 @@ class SocketService {
 
   void _sendMessageNow(Map<String, dynamic> message) {
     if (_socket == null || !_isConnected) {
-      console.log('⚠️ Socket não disponível para envio');
+      debugPrint('⚠️ Socket não disponível para envio');
       return;
     }
 
     try {
       final jsonMessage = json.encode(message);
-      console.log('📤 Enviando: $jsonMessage');
+      debugPrint('📤 Enviando: $jsonMessage');
       _socket!.add(utf8.encode('$jsonMessage\n'));
     } catch (e) {
-      console.log('❌ Erro ao enviar mensagem: $e');
+      debugPrint('❌ Erro ao enviar mensagem: $e');
       _messageController.add({
         'action': 'error',
         'message': 'Erro ao enviar mensagem: $e',
@@ -407,6 +561,6 @@ class SocketService {
     _socket?.close();
     _isConnected = false;
     _messageController.close();
-    console.log('🔌 Desconectado do servidor');
+    debugPrint('🔌 Desconectado do servidor');
   }
 }

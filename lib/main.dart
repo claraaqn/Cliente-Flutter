@@ -4,6 +4,7 @@ import 'package:cliente/providers/auth_provider.dart';
 import 'package:cliente/screens/login_screen.dart';
 import 'package:cliente/screens/contacts_screen.dart';
 import 'package:cliente/screens/register_screen.dart';
+import 'package:cliente/services/local_storage_service.dart';
 
 void main() {
   runApp(const MyApp());
@@ -14,8 +15,12 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (context) => AuthProvider(),
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (context) => AuthProvider()),
+        Provider(
+            create: (context) => LocalStorageService()),
+      ],
       child: MaterialApp(
         title: 'Sistema de Chat',
         theme: ThemeData(
@@ -57,7 +62,6 @@ class AuthWrapper extends StatelessWidget {
   Widget build(BuildContext context) {
     final authProvider = Provider.of<AuthProvider>(context);
 
-    // Verifica o estado de autenticação ao inicializar
     WidgetsBinding.instance.addPostFrameCallback((_) {
       authProvider.initialize();
     });

@@ -1,10 +1,13 @@
 import 'dart:async';
-import 'dart:developer' as console;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:cliente/providers/auth_provider.dart';
-import 'package:cliente/models/message.dart';
+import 'package:cliente/database_helper.dart';
+import 'package:cliente/models/chat_models.dart';
 import 'package:cliente/models/friend.dart';
+import 'package:cliente/models/message.dart';
+import 'package:cliente/providers/auth_provider.dart';
+import 'package:cliente/services/local_storage_service.dart';
 
 class ChatScreen extends StatefulWidget {
   final Friend friend;
@@ -19,35 +22,56 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<Message> _messages = [];
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+
   bool _isLoading = true;
   bool _isSending = false;
   bool _isTyping = false;
+  bool _isCurrentlyTyping = false;
+  bool _friendOnline = false;
+  bool _hasLoadedLocalMessages = false;
 
+  Timer? _typingDebounceTimer;
+  static const int _typingDebounceMs = 1000;
   Timer? _typingTimer;
-  static const int _typingTimeoutMs = 1500; // 1.5 segundos
-  bool _isSendingTypingStart = false; // Novo estado para controlar o envio
 
   StreamSubscription? _messageSubscription;
+  LocalStorageService? _localStorage;
 
   @override
   void initState() {
     super.initState();
+    debugPrint('🚀 ChatScreen iniciado para: ${widget.friend.username}');
     _initializeChat();
-    _loadMessages();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_localStorage == null) {
+      _localStorage = Provider.of<LocalStorageService>(context, listen: false);
+      debugPrint('✅ LocalStorageService obtido com sucesso');
+    }
   }
 
   void _initializeChat() {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final socketService = authProvider.socketService;
 
-    // CORREÇÃO: Usar subscription para gerenciar melhor
     _messageSubscription = socketService.messageStream.listen((message) {
       _handleIncomingMessage(message);
     });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadLocalMessages();
+      _syncUnsentMessages();
+      _checkPendingMessages();
+    });
   }
 
+//! mensagens
   void _handleIncomingMessage(Map<String, dynamic> message) {
     final action = message['action'];
+    debugPrint('📨 Mensagem recebida: $action');
 
     switch (action) {
       case 'new_message':
@@ -56,8 +80,8 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'user_typing':
         _handleTypingIndicator(message);
         break;
-      case 'user_status_change':
-        _handleUserStatusChange(message);
+      case 'user_online_status':
+        _handleOnlineStatus(message);
         break;
     }
   }
@@ -66,149 +90,218 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       final currentUserId =
           Provider.of<AuthProvider>(context, listen: false).userId;
-      final currentUserIdInt = currentUserId;
+      debugPrint('📨 Processando nova mensagem: ${message['content']}');
 
-      final newMessage = _createMessageFromMap(message, currentUserIdInt);
+      final newMessage = _createMessageFromMap(message, currentUserId);
 
       if (newMessage != null) {
-        _addNewMessage(newMessage);
+        debugPrint(
+            '✅ Mensagem criada: "${newMessage.content}" - ID: ${newMessage.id}');
 
-        _scrollToBottom();
+        final isDuplicate = _messages.any((msg) {
+          final timeDiff =
+              msg.timestamp.difference(newMessage.timestamp).inSeconds.abs();
+          final isDuplicateByContent = msg.content == newMessage.content &&
+              msg.senderId == newMessage.senderId &&
+              timeDiff < 3;
+
+          if (isDuplicateByContent) {
+            debugPrint(
+                '⚠️ Duplicata detectada: "${msg.content}" - timeDiff: $timeDiff segundos');
+          }
+
+          return isDuplicateByContent;
+        });
+
+        if (!isDuplicate) {
+          if (mounted) {
+            setState(() {
+              _messages.add(newMessage);
+              _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+            });
+            _scrollToBottom();
+            debugPrint('✅ Nova mensagem ADICIONADA: "${newMessage.content}"');
+            debugPrint('📊 Total de mensagens: ${_messages.length}');
+
+            for (var i = 0; i < _messages.length; i++) {
+              debugPrint(
+                  '🔄 Ordem [$i]: "${_messages[i].content}" - ${_messages[i].timestamp}');
+            }
+
+            _saveMessageLocally(newMessage);
+          }
+        } else {
+          debugPrint('⚠️ Mensagem duplicada IGNORADA: "${newMessage.content}"');
+          _saveMessageLocally(newMessage);
+        }
       }
     } catch (e) {
-      console.log('❌ Erro ao processar nova mensagem: $e');
+      debugPrint('❌ Erro ao processar nova mensagem: $e');
+    }
+  }
+
+  Future<void> _saveMessageLocally(Message message) async {
+    try {
+      final chatMessage = ChatMessage(
+        from: message.senderId.toString(),
+        content: message.content,
+        timestamp: message.timestamp,
+      );
+      await DatabaseHelper.instance
+          .insertMessage(chatMessage, widget.friend.username);
+      debugPrint('💾 Mensagem salva localmente: ${message.content}');
+    } catch (e) {
+      debugPrint('❌ Erro ao salvar mensagem localmente: $e');
+    }
+  }
+
+  void _handleTypingIndicator(Map<String, dynamic> message) {
+    final username = message['username'];
+    final isTyping = message['is_typing'] == true;
+
+    if (username == widget.friend.username) {
+      if (mounted) {
+        setState(() {
+          _isTyping = isTyping;
+        });
+      }
+      debugPrint('✍️ $username está ${isTyping ? 'digitando' : 'parou'}');
+    }
+  }
+
+  void _handleOnlineStatus(Map<String, dynamic> message) {
+    final username = message['username'];
+    final isOnline = message['is_online'] == true;
+
+    if (username == widget.friend.username) {
+      if (mounted) {
+        setState(() {
+          _friendOnline = isOnline;
+        });
+      }
+
+      debugPrint('🟢 $username está ${isOnline ? 'online' : 'offline'}');
+
+      if (isOnline) {
+        debugPrint('🔄 Amigo ficou online, verificando mensagens pendentes...');
+        _checkPendingMessages();
+      }
     }
   }
 
   Message? _createMessageFromMap(
       Map<String, dynamic> data, int? currentUserId) {
     try {
-      // Funções de conversão locais
-      int? safeParseInt(dynamic value) {
-        if (value == null) return null;
-        if (value is int) return value;
-        if (value is String) return int.tryParse(value);
+      final senderId = data['sender_id'];
+      final receiverId = data['receiver_id'];
+      final serverId = data['id'];
+      final content = data['content'] ?? '';
+
+      if (senderId == null || receiverId == null || currentUserId == null) {
+        debugPrint('❌ Dados incompletos para criar mensagem');
         return null;
       }
 
-      String safeParseString(dynamic value) {
-        if (value == null) return '';
-        if (value is String) return value;
-        return value.toString();
-      }
-
-      DateTime safeParseDateTime(dynamic value) {
-        if (value == null) return DateTime.now();
-        if (value is DateTime) return value;
-        if (value is String) {
-          try {
-            return DateTime.parse(value);
-          } catch (e) {
-            return DateTime.now();
-          }
-        }
-        return DateTime.now();
-      }
-
-      // CORREÇÃO: Extrair IDs de forma mais robusta
-      final senderId =
-          safeParseInt(data['sender_id']) ?? safeParseInt(data['senderId']);
-      final receiverId =
-          safeParseInt(data['receiver_id']) ?? safeParseInt(data['receiverId']);
-
-      if (senderId == null || receiverId == null) {
-        console.log('❌ IDs inválidos: sender=$senderId, receiver=$receiverId');
-        console.log('📨 Dados da mensagem: $data');
-        return null;
-      }
-
-      // CORREÇÃO: Verificar se a mensagem é para este chat
       final isMessageForThisChat =
-          (senderId == widget.friend.id && receiverId == currentUserId) ||
-              (receiverId == widget.friend.id && senderId == currentUserId);
+          (senderId == currentUserId && receiverId == widget.friend.id) ||
+              (receiverId == currentUserId && senderId == widget.friend.id);
 
       if (!isMessageForThisChat) {
-        console
-            .log('❌ Mensagem não é para este chat: $senderId -> $receiverId');
-        console
-            .log('👥 Chat atual: Eu=$currentUserId, Amigo=${widget.friend.id}');
+        debugPrint(
+            '❌ Mensagem não é para este chat: currentUser=$currentUserId, friendId=${widget.friend.id}');
         return null;
       }
 
-      console.log('✅ Nova mensagem recebida em tempo real: ${data['content']}');
+      int? messageId;
+      if (serverId != null && serverId != 411) {
+        messageId = serverId;
+      } else {
+        final uniqueString = '${content}_${data['timestamp']}_$senderId';
+        messageId = uniqueString.hashCode;
+        debugPrint('🆔 ID gerado localmente: $messageId para "$content"');
+      }
+
+      final isMine = senderId == currentUserId;
+      final now = DateTime.now();
 
       return Message(
-        id: safeParseInt(data['id']),
+        id: messageId,
         senderId: senderId,
         receiverId: receiverId,
-        content: safeParseString(data['content']),
-        timestamp: safeParseDateTime(data['timestamp']),
+        content: content,
+        timestamp: now,
         isDelivered: true,
-        isMine: senderId == currentUserId,
+        isMine: isMine,
+        localId: null,
+        isSentToServer: true,
+        hasError: false,
       );
     } catch (e) {
-      console.log('❌ Erro ao criar mensagem: $e');
+      debugPrint('❌ Erro ao criar mensagem: $e');
+      debugPrint('❌ Dados da mensagem: $data');
       return null;
     }
   }
 
-  Future<void> _loadMessages() async {
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final socketService = authProvider.socketService;
+  Future<void> _loadLocalMessages() async {
+    if (_localStorage == null || _hasLoadedLocalMessages) return;
 
     try {
-      final response = await socketService.getConversationHistory(
-        widget.friend.id.toString(),
-        limit: 50,
+      _hasLoadedLocalMessages = true;
+
+      final localMessages = await _localStorage!.getLocalConversationHistory(
+        widget.friend.username,
+        100,
       );
 
-      if (response['success'] == true && mounted) {
-        final currentUserId = authProvider.userId.toString();
-        final currentUserIdInt = int.tryParse(currentUserId);
+      final currentUserId =
+          Provider.of<AuthProvider>(context, listen: false).userId;
 
-        final messagesData = response['data'];
-        List<Message> messagesList = [];
+      final now = DateTime.now();
 
-        if (messagesData is List) {
-          messagesList = messagesData
-              .map((msgJson) {
-                try {
-                  final message =
-                      _createMessageFromMap(msgJson, currentUserIdInt);
-                  if (message != null) {
-                    return message.copyWith(
-                      isMine: message.senderId == currentUserIdInt,
-                    );
-                  }
-                  return null;
-                } catch (e) {
-                  console.log('❌ Erro ao converter mensagem: $e');
-                  return null;
-                }
-              })
-              .whereType<Message>()
-              .toList();
+      final messagesList = localMessages.map((msgData) {
+        return Message(
+          id: msgData['server_id'] ?? msgData['local_id']?.hashCode,
+          senderId: msgData['sender_id'],
+          receiverId: widget.friend.id, // Valor fallback
+          content: msgData['content'],
+          timestamp: now,
+          isDelivered: msgData['is_delivered'] == 1,
+          isMine: msgData['sender_id'] == currentUserId,
+          localId: msgData['local_id'],
+          isSentToServer: msgData['is_sent_to_server'] == 1,
+          hasError: false,
+        );
+      }).toList();
 
-          // CORREÇÃO: Ordenar mensagens por timestamp (mais antigas primeiro)
-          messagesList.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-        }
+      messagesList.sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
+      if (mounted) {
         setState(() {
-          _messages.clear();
-          _messages.addAll(messagesList);
-          _isLoading = false;
-        });
+          if (_messages.isEmpty) {
+            _messages.addAll(messagesList);
+          } else {
+            for (final localMsg in messagesList) {
+              final exists = _messages.any((existingMsg) =>
+                  existingMsg.content == localMsg.content &&
+                  existingMsg.timestamp
+                          .difference(localMsg.timestamp)
+                          .inSeconds
+                          .abs() <
+                      3);
 
+              if (!exists) {
+                _messages.add(localMsg);
+              }
+            }
+            _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+          }
+        });
         _scrollToBottom();
-      } else {
-        if (mounted) {
-          setState(() {
-            _isLoading = false;
-          });
-        }
       }
     } catch (e) {
-      console.log('❌ Erro ao carregar mensagens: $e');
+      debugPrint('❌ Erro ao carregar mensagens locais: $e');
+    } finally {
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -217,41 +310,36 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _handleTypingIndicator(Map<String, dynamic> message) {
-    final userId = message['user_id']?.toString();
-    final isTyping = message['is_typing'] == true;
+  Future<void> _syncUnsentMessages() async {
+    if (_localStorage == null) return;
+    debugPrint('🔄 Sincronizando mensagens não enviadas...');
+  }
 
-    if (userId == widget.friend.id.toString()) {
-      if (mounted) {
-        setState(() {
-          _isTyping = isTyping;
-        });
-      }
+  void _checkPendingMessages() async {
+    try {
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      await authProvider.socketService.checkPendingMessages();
+      debugPrint('✅ Verificação de mensagens pendentes concluída');
+    } catch (e) {
+      debugPrint('❌ Erro ao verificar mensagens pendentes: $e');
     }
   }
 
-  void _handleUserStatusChange(Map<String, dynamic> message) {
-    // a qualquer momento
-  }
-
-  Future<void> _sendMessage() async {
-    // CORREÇÃO: Validações mais robustas
-    final content = _messageController.text.trim();
-    if (content.isEmpty || _isSending) return;
+  void _sendMessage() async {
+    final text = _messageController.text.trim();
+    if (text.isEmpty) return;
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final socketService = authProvider.socketService;
+    final currentUserId = authProvider.userId;
 
-    // CORREÇÃO: Verificar autenticação
-    if (authProvider.userId == null) {
+    if (currentUserId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Usuário não autenticado')),
       );
       return;
     }
 
-    // CORREÇÃO: Verificar friend.username
-    if (widget.friend.username.isEmpty) {
+    if (widget.friend.id == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Destinatário inválido')),
       );
@@ -262,82 +350,53 @@ class _ChatScreenState extends State<ChatScreen> {
       _isSending = true;
     });
 
-    _messageController.clear();
+    final now = DateTime.now();
 
     try {
-      // CORREÇÃO: Adicionar mensagem localmente
-      final newMessage = Message(
-        id: null,
-        senderId: authProvider.userId!,
-        receiverId: widget.friend.id,
-        content: content,
-        timestamp: DateTime.now(),
-        isDelivered: false,
-        isMine: true,
+      final sentMessage = ChatMessage(
+        from: currentUserId.toString(),
+        content: text,
+        timestamp: now,
       );
+      await DatabaseHelper.instance
+          .insertMessage(sentMessage, widget.friend.username);
 
-      _addNewMessage(newMessage);
+      if (mounted) {
+        setState(() {
+          _messages.add(Message(
+            id: null,
+            senderId: currentUserId,
+            receiverId: widget.friend.id,
+            content: text,
+            timestamp: now,
+            isDelivered: false,
+            isMine: true,
+            localId:
+                'local_${DateTime.now().millisecondsSinceEpoch}_$currentUserId',
+            isSentToServer: false,
+            hasError: false,
+          ));
+          _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+        });
+      }
 
-      // CORREÇÃO: Enviar mensagem com tratamento de erro
-      final response = await socketService.sendMessage(
-        widget.friend.username,
-        content,
-      );
+      _messageController.clear();
+      _scrollToBottom();
 
-      if (response['success'] == true && mounted) {
-        // Atualizar mensagem com ID do servidor
-        final messageIdStr = response['data']?['message_id']?.toString();
-        if (messageIdStr != null) {
-          final messageId = int.tryParse(messageIdStr);
-          if (messageId != null) {
-            final messageIndex = _messages.indexWhere((msg) => msg.id == null);
-            if (messageIndex != -1) {
-              setState(() {
-                _messages[messageIndex] = _messages[messageIndex].copyWith(
-                  id: messageId, // Agora é int
-                  isDelivered: true,
-                );
-              });
-            }
-          } else {
-            console.log('❌ message_id inválido: $messageIdStr');
-          }
-        }
+      final socketService = authProvider.socketService;
+      final response =
+          await socketService.sendMessage(widget.friend.username, text);
+
+      if (response['success'] == true) {
+        debugPrint('✅ Mensagem enviada para o servidor');
       } else {
-        // CORREÇÃO: Marcar mensagem como erro
-        final errorMessage = response['message'] ?? 'Erro ao enviar mensagem';
-        final messageIndex = _messages.indexWhere((msg) => msg.id == null);
-        if (messageIndex != -1 && mounted) {
-          setState(() {
-            _messages[messageIndex] = _messages[messageIndex].copyWith(
-              hasError: true,
-            );
-          });
-        }
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(errorMessage)),
-          );
-        }
+        debugPrint('❌ Erro ao enviar mensagem: ${response['message']}');
       }
     } catch (e) {
-      console.log('❌ Erro ao enviar mensagem: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro: $e')),
-        );
-
-        // Marcar mensagem como erro
-        final messageIndex = _messages.indexWhere((msg) => msg.id == null);
-        if (messageIndex != -1) {
-          setState(() {
-            _messages[messageIndex] = _messages[messageIndex].copyWith(
-              hasError: true,
-            );
-          });
-        }
-      }
+      debugPrint('❌ Erro ao enviar mensagem: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erro ao enviar mensagem: $e')),
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -347,13 +406,57 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _addNewMessage(Message message) {
-    if (mounted) {
-      setState(() {
-        _messages.add(message);
-        _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-      });
-      _scrollToBottom();
+  //! digitação
+  void _onTextChanged(String text) {
+    _typingDebounceTimer?.cancel();
+
+    final hasText = text.isNotEmpty;
+
+    if (!_isCurrentlyTyping && hasText) {
+      _sendTypingStart();
+      _isCurrentlyTyping = true;
+    }
+
+    _typingDebounceTimer = Timer(
+      const Duration(milliseconds: _typingDebounceMs),
+      () {
+        if (mounted && _isCurrentlyTyping) {
+          _sendTypingStop();
+          _isCurrentlyTyping = false;
+        }
+      },
+    );
+  }
+
+  void _sendTypingStart() {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final socketService = authProvider.socketService;
+
+    try {
+      socketService.sendTypingStart(widget.friend.username);
+      debugPrint('✍️ Start typing enviado para ${widget.friend.username}');
+    } catch (e) {
+      debugPrint('❌ Erro ao enviar typing start: $e');
+    }
+  }
+
+  void _sendTypingStop() {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final socketService = authProvider.socketService;
+
+    try {
+      socketService.sendTypingStop(widget.friend.username);
+      debugPrint('🛑 Stop typing enviado para ${widget.friend.username}');
+    } catch (e) {
+      debugPrint('❌ Erro ao enviar typing stop: $e');
+    }
+  }
+
+  void _clearTypingTimer() {
+    _typingDebounceTimer?.cancel();
+    if (_isCurrentlyTyping) {
+      _sendTypingStop();
+      _isCurrentlyTyping = false;
     }
   }
 
@@ -367,28 +470,6 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       }
     });
-  }
-
-  void _onTypingStarted() {
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final socketService = authProvider.socketService;
-
-    try {
-      socketService.sendTypingStart(widget.friend.username);
-    } catch (e) {
-      console.log('❌ Erro ao enviar typing start: $e');
-    }
-  }
-
-  void _onTypingStopped() {
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final socketService = authProvider.socketService;
-
-    try {
-      socketService.sendTypingStop(widget.friend.username);
-    } catch (e) {
-      console.log('❌ Erro ao enviar typing stop: $e');
-    }
   }
 
   //? definiciões do front
@@ -413,6 +494,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _buildMessageBubble(Message message) {
     final isMe = message.isMine;
+    debugPrint('🎨 BUILDING BUBBLE: "${message.content}" - isMine: $isMe');
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
@@ -509,6 +591,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final sortedMessages = List<Message>.from(_messages)
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
     return Scaffold(
       appBar: AppBar(
         title: Column(
@@ -529,13 +614,14 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   )
                 : Text(
-                    widget.friend.isOnline
+                    _friendOnline || widget.friend.isOnline
                         ? 'Online'
                         : _formatLastSeen(widget.friend.lastSeen),
                     style: TextStyle(
                       fontSize: 12,
-                      color:
-                          widget.friend.isOnline ? Colors.green : Colors.grey,
+                      color: (_friendOnline || widget.friend.isOnline)
+                          ? Colors.green
+                          : Colors.grey,
                     ),
                   ),
           ],
@@ -549,8 +635,6 @@ class _ChatScreenState extends State<ChatScreen> {
             icon: const Icon(Icons.info_outline),
             onPressed: () {
               // TODO: Mostrar informações do contato
-              // TODO: Opção de excluit conversa
-              // TODO: Acabar amizade
             },
           ),
         ],
@@ -582,10 +666,11 @@ class _ChatScreenState extends State<ChatScreen> {
                     : ListView.builder(
                         controller: _scrollController,
                         padding: const EdgeInsets.only(bottom: 8),
-                        itemCount: _messages.length,
+                        itemCount: sortedMessages.length,
+                        reverse: false,
                         itemBuilder: (context, index) {
-                          
-                          return _buildMessageBubble(_messages[index]);
+                          final message = sortedMessages[index];
+                          return _buildMessageBubble(message);
                         },
                       ),
           ),
@@ -606,26 +691,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 Expanded(
                   child: TextField(
                     controller: _messageController,
-                    onChanged: (text) {
-                      if (text.isNotEmpty && !_isSendingTypingStart) {
-                        _onTypingStarted();
-                        _isSendingTypingStart = true;
-                      }
-
-                      _typingTimer?.cancel();
-                      _typingTimer = Timer(
-                          const Duration(milliseconds: _typingTimeoutMs), () {
-                        if (text.isEmpty || !mounted) return;
-                        _onTypingStopped();
-                        _isSendingTypingStart = false;
-                      });
-
-                      if (text.isEmpty && _isSendingTypingStart) {
-                        _typingTimer?.cancel();
-                        _onTypingStopped();
-                        _isSendingTypingStart = false;
-                      }
-                    },
+                    onChanged: _onTextChanged,
                     onSubmitted: (text) => _sendMessage(),
                     decoration: InputDecoration(
                       hintText: 'Digite uma mensagem...',
@@ -664,9 +730,11 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _messageSubscription?.cancel();
-    _messageController.dispose();
-    _scrollController.dispose();
+    _typingDebounceTimer?.cancel();
     _typingTimer?.cancel();
+    _clearTypingTimer();
+    _scrollController.dispose();
+    _messageController.dispose();
     super.dispose();
   }
 }
