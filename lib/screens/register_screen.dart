@@ -43,7 +43,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  Future<void> _register(BuildContext context) async {
+  Future<void> register(BuildContext context) async {
     if (_formKey.currentState!.validate()) {
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
 
@@ -60,9 +60,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
         _passwordController.clear();
         _confirmPasswordController.clear();
 
-        // Navega para login ou mantém na tela
         Future.delayed(const Duration(seconds: 2), () {
-          Navigator.pop(context); // Volta para a tela anterior
+          Navigator.pop(context); 
         });
       } else {
         _showErrorSnackBar(authProvider.errorMessage);
@@ -172,7 +171,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     const CircularProgressIndicator()
                   else
                     ElevatedButton(
-                      onPressed: () => _register(context),
+                      onPressed: () => register(context),
                       style: ElevatedButton.styleFrom(
                         minimumSize: const Size(double.infinity, 50),
                         backgroundColor: Colors.blue,

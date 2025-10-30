@@ -339,13 +339,6 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    if (widget.friend.id == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Destinatário inválido')),
-      );
-      return;
-    }
-
     setState(() {
       _isSending = true;
     });

@@ -126,45 +126,51 @@ class SocketService {
   }
 
   //? tudo aqui cunciona - autenticação
-  Future<Map<String, dynamic>> login(String username, String password) async {
-    final message = {
-      'action': 'login',
-      'username': username,
-      'password': password,
-    };
-    final response = await _sendAndWaitForResponse(message, 'login_response');
-    if (response['success'] == true) {
-      _username = username;
-      _userId = response['data']?['user_id'].toString();
-      ;
-    }
-    return response;
-  }
-
-  Future<Map<String, dynamic>> registerUser(
-      String username, String password) async {
+  Future<Map<String, dynamic>> register({
+    required String username,
+    required String password,
+    required String publicKey,
+  }) async {
     return _sendAndWaitForResponse(
       {
         'action': 'register',
         'username': username,
         'password': password,
+        'public_key': publicKey,
       },
       'register_response',
     );
   }
 
-  Future<Map<String, dynamic>> logout() async {
+  Future<Map<String, dynamic>> getUserSalt(String username) async {
+    return _sendAndWaitForResponse(
+      {
+        'action': 'get_user_salt',
+        'username': username,
+      },
+      'user_salt_response',
+    );
+  }
+
+  Future<Map<String, dynamic>> login({
+    required String username,
+    required String password,
+  }) async {
     final response = await _sendAndWaitForResponse(
       {
-        'action': 'logout',
+        'action': 'login',
+        'username': username,
+        'password': password,
       },
-      'logout_response',
+      'login_response',
     );
 
     if (response['success'] == true) {
-      _userId = null;
-      _username = null;
-      debugPrint('👤 Usuário deslogado');
+      final userData = response['data']?['user_data'] ?? response['data'];
+      if (userData != null) {
+        _userId = userData['user_id']?.toString();
+        _username = userData['username']?.toString() ?? username;
+      }
     }
 
     return response;
