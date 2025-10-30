@@ -1,15 +1,20 @@
 import 'dart:developer';
 
+import 'package:cliente/services/local_storage_service.dart';
 import 'package:cliente/services/socket_service_factory.dart';
 import 'package:flutter/foundation.dart';
+import 'package:cliente/services/crypto_service.dart';
 
 class AuthProvider with ChangeNotifier {
   late dynamic _socketService;
+  final CryptoService _cryptoService = CryptoService();
+  final LocalStorageService _localStorageService;
 
-  AuthProvider() {
+  AuthProvider() : _localStorageService = LocalStorageService() {
     _socketService = SocketServiceFactory.createSocketService();
     log('✅ AuthProvider inicializado com: ${_socketService.runtimeType}');
   }
+
   bool _isLoading = false;
   String _errorMessage = '';
   bool _isLoggedIn = false;
@@ -42,16 +47,24 @@ class AuthProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      final response = await _socketService.registerUser(username, password);
+      // Gera chaves ECC
+      final keyPair = _cryptoService.generateKeyPair();
+      final publicKey = keyPair['publicKey']!;
+      final privateKey = keyPair['privateKey']!;
 
-      _isLoading = false;
+      final response = await _socketService.register(
+        username: username,
+        password: password,
+        publicKey: publicKey,
+      );
 
       if (response['success'] == true) {
+        await _localStorageService.savePrivateKey(privateKey);
         _errorMessage = '';
         notifyListeners();
         return true;
       } else {
-        _errorMessage = response['message'] ?? 'Erro desconhecido no registro';
+        _errorMessage = response['message'] ?? 'Erro no registro';
         notifyListeners();
         return false;
       }
@@ -60,6 +73,9 @@ class AuthProvider with ChangeNotifier {
       _errorMessage = 'Erro de conexão: $e';
       notifyListeners();
       return false;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
     }
   }
 
@@ -69,19 +85,32 @@ class AuthProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      final response = await _socketService.login(username, password);
+
+      final response = await _socketService.login(
+        username: username,
+        password: password,
+      );
 
       _isLoading = false;
 
       if (response['success'] == true) {
-        _isLoggedIn = true;
-        _userId = response['data']['user_id'];
-        _username = response['data']['username'];
-        _errorMessage = '';
-        notifyListeners();
-        return true;
+        final userData = response['data']?['user_data'] ?? response['data'];
+
+        if (userData != null) {
+          _isLoggedIn = true;
+          _userId = int.tryParse(userData['user_id']?.toString() ?? '');
+          _username = userData['username']?.toString() ?? username;
+
+          _errorMessage = '';
+          notifyListeners();
+          return true;
+        } else {
+          _errorMessage = 'Dados do usuário não encontrados';
+          notifyListeners();
+          return false;
+        }
       } else {
-        _errorMessage = response['message'] ?? 'Erro desconhecido no login';
+        _errorMessage = response['message'] ?? 'Erro no login';
         notifyListeners();
         return false;
       }

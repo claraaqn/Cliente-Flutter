@@ -1,10 +1,10 @@
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 
 class LocalStorageService {
   static Database? _database;
-  
 
   Future<Database> get database async {
     if (_database != null) return _database!;
@@ -154,4 +154,34 @@ class LocalStorageService {
     return null;
   }
 
+  Future<void> savePrivateKey(String privateKey) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('private_key', privateKey);
+      debugPrint('Chave privada salva com sucesso');
+    } catch (e) {
+      debugPrint('Erro ao salvar chave privada: $e');
+      throw Exception('Falha ao salvar chave privada');
+    }
+  }
+
+  Future<String?> getPrivateKey() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString('private_key');
+    } catch (e) {
+      debugPrint('Erro ao recuperar chave privada: $e');
+      return null;
+    }
+  }
+
+  Future<void> clearPrivateKey() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('private_key');
+      debugPrint('Chave privada removida');
+    } catch (e) {
+      debugPrint('Erro ao remover chave privada: $e');
+    }
+  }
 }

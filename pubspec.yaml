@@ -17,7 +17,13 @@ dependencies:
   shared_preferences: ^2.2.2
   sqflite: ^2.4.2
   path: ^1.9.1
-
+  argon2: ^1.0.1
+  cryptography: ^2.7.0
+  pointycastle: ^3.7.3
+  asn1lib: ^1.1.2
+  crypto: ^3.0.3
+  dargon2_flutter: ^3.3.0
+  
 dev_dependencies:
   flutter_test:
     sdk: flutter
