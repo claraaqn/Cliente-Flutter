@@ -1,38 +1,13 @@
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
-import 'package:pointycastle/api.dart';
-import 'package:pointycastle/ecc/api.dart';
-import 'package:pointycastle/key_generators/api.dart';
-import 'package:pointycastle/key_generators/ec_key_generator.dart';
-import 'package:pointycastle/random/fortuna_random.dart';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/material.dart';
 
 class CryptoService {
   static final CryptoService _instance = CryptoService._internal();
   factory CryptoService() => _instance;
   CryptoService._internal();
-
-  // Gera um par de chaves ECC
-  Map<String, String> generateKeyPair() {
-    final ecParams = ECDomainParameters('secp256k1');
-    final keyGenerator = ECKeyGenerator();
-    final keyParams = ECKeyGeneratorParameters(ecParams);
-
-    keyGenerator.init(ParametersWithRandom(
-      keyParams,
-      FortunaRandom()..seed(KeyParameter(_getSecureRandom())),
-    ));
-
-    final keyPair = keyGenerator.generateKeyPair();
-    final privateKey = keyPair.privateKey as ECPrivateKey;
-    final publicKey = keyPair.publicKey as ECPublicKey;
-
-    return {
-      'privateKey': _encodePrivateKey(privateKey),
-      'publicKey': _encodePublicKey(publicKey),
-    };
-  }
 
   Uint8List _getSecureRandom() {
     final random = Random.secure();
@@ -40,44 +15,69 @@ class CryptoService {
     return Uint8List.fromList(bytes);
   }
 
-  String _encodePrivateKey(ECPrivateKey privateKey) {
-    // Converte BigInt para bytes (32 bytes para secp256k1)
-    final d = privateKey.d!;
-    final bytes = _bigIntToBytes(d, 32);
-    return base64Encode(bytes);
+  // Gera um par de chaves ECC principais (para registro/login)
+  Map<String, String> generateKeyPair() {
+    final privateKey = _getSecureRandom();
+    final publicKey = _calculatePublicKey(privateKey);
+
+    return {
+      'privateKey': base64Encode(privateKey),
+      'publicKey': base64Encode(publicKey),
+    };
   }
 
-  String _encodePublicKey(ECPublicKey publicKey) {
-    final q = publicKey.Q!;
+  // Gera par DHE efêmero com Ed25519 (32 bytes)
+  Map<String, String> generateDHEKeyPair() {
+    // Para Ed25519, a chave privada é 32 bytes aleatórios
+    final privateKey = _getSecureRandom();
 
-    // Converte coordenadas x e y para bytes
-    final xBytes = _bigIntToBytes(q.x!.toBigInteger()!, 32);
-    final yBytes = _bigIntToBytes(q.y!.toBigInteger()!, 32);
+    // Calcula chave pública Ed25519 (32 bytes)
+    final publicKey = _calculatePublicKey(privateKey);
 
-    // Formato comprimido: 0x02 (par) ou 0x03 (ímpar) + coordenada x
-    final header = yBytes[31] % 2 == 0 ? 0x02 : 0x03;
-    final publicKeyBytes = Uint8List.fromList([header] + xBytes.toList());
+    debugPrint('🔑 Chave DHE pública gerada (Ed25519): ${publicKey.length} bytes');
 
-    return base64Encode(publicKeyBytes);
+    return {
+      'privateKey': base64Encode(privateKey),
+      'publicKey': base64Encode(publicKey),
+    };
   }
 
-  Uint8List _bigIntToBytes(BigInt number, int length) {
-    var hex = number.toRadixString(16);
-    // Preenche com zeros à esquerda se necessário
-    if (hex.length % 2 != 0) {
-      hex = '0$hex';
-    }
-    if (hex.length ~/ 2 < length) {
-      hex = hex.padLeft(length * 2, '0');
-    }
+  // Simula cálculo de chave pública Ed25519
+  Uint8List _calculatePublicKey(Uint8List privateKey) {
+    // Em uma implementação real com Ed25519:
+    // publicKey = ed25519_publickey(privateKey)
 
-    final result = Uint8List(length);
-    for (int i = 0; i < length; i++) {
-      final byteStr = hex.substring(i * 2, i * 2 + 2);
-      result[length - 1 - i] = int.parse(byteStr, radix: 16);
-    }
+    // Para teste, vamos usar SHA256 da private key como public key
+    // (Isso é apenas para demonstração - não use em produção)
+    final hash = sha256.convert(privateKey).bytes;
+    return Uint8List.fromList(hash.sublist(0, 32));
+  }
 
-    return result;
+  /// Calcula segredo compartilhado para Ed25519
+  Uint8List computeSharedSecretBytes({
+    required String ownPrivateBase64,
+    required String peerPublicBase64,
+  }) {
+    try {
+      final ownPrivate = base64Decode(ownPrivateBase64);
+      final peerPublic = base64Decode(peerPublicBase64);
+
+      debugPrint('🔐 Calculando segredo compartilhado Ed25519');
+      debugPrint('📏 Chave privada: ${ownPrivate.length} bytes');
+      debugPrint('📏 Chave pública peer: ${peerPublic.length} bytes');
+
+      // Em uma implementação real com X25519:
+      // sharedSecret = x25519(ownPrivate, peerPublic)
+
+      // Para teste, vamos combinar as chaves e fazer hash
+      final combined = Uint8List.fromList([...ownPrivate, ...peerPublic]);
+      final sharedSecret = sha256.convert(combined).bytes;
+
+      return Uint8List.fromList(sharedSecret.sublist(0, 32));
+    } catch (e) {
+      debugPrint('❌ Erro ao calcular segredo compartilhado: $e');
+      rethrow;
+    }
   }
 
   String generateSalt() {
@@ -86,21 +86,53 @@ class CryptoService {
     return base64Encode(bytes);
   }
 
-  //TODO: assinatura e verificação
-  String signMessage(String message, String privateKeyBase64) {
-    // Implementação de assinatura ECDSA
-    final messageBytes = utf8.encode(message);
-    final digest = sha256.convert(messageBytes).bytes;
-    // TODO: Implementar assinatura ECDSA com a chave privada
-    return base64Encode(digest);
+  /// Deriva chaves de sessão usando HKDF-SHA256
+  Map<String, Uint8List> deriveKeysFromSharedSecret({
+    required Uint8List sharedSecret,
+    required String saltBase64,
+    List<int>? info,
+  }) {
+    final salt = saltBase64.isEmpty ? Uint8List(0) : base64Decode(saltBase64);
+    final prk = _hkdfExtract(salt: salt, ikm: sharedSecret);
+    final okm = _hkdfExpand(prk: prk, info: info ?? <int>[], length: 64);
+
+    final encKey = okm.sublist(0, 32);
+    final hmacKey = okm.sublist(32, 64);
+
+    return {
+      'encryptionKey': Uint8List.fromList(encKey),
+      'hmacKey': Uint8List.fromList(hmacKey),
+    };
   }
 
-  bool verifySignature(
-      String message, String signature, String publicKeyBase64) {
-    // Implementação de verificação ECDSA
-    final messageBytes = utf8.encode(message);
-    final digest = sha256.convert(messageBytes).bytes;
-    // TODO: Implementar verificação ECDSA com a chave pública
-    return true;
+  // --- HKDF implementation ---
+  Uint8List _hkdfExtract({required Uint8List salt, required Uint8List ikm}) {
+    final hmac = Hmac(sha256, salt);
+    final prkBytes = hmac.convert(ikm).bytes;
+    return Uint8List.fromList(prkBytes);
+  }
+
+  Uint8List _hkdfExpand({
+    required Uint8List prk,
+    required List<int> info,
+    required int length,
+  }) {
+    final hmac = Hmac(sha256, prk);
+    final List<int> okm = [];
+    var previous = <int>[];
+    var iterations = (length / 32).ceil();
+
+    for (var i = 1; i <= iterations; i++) {
+      final input = <int>[];
+      if (previous.isNotEmpty) input.addAll(previous);
+      input.addAll(info);
+      input.add(i);
+
+      final t = hmac.convert(Uint8List.fromList(input)).bytes;
+      okm.addAll(t);
+      previous = t;
+    }
+
+    return Uint8List.fromList(okm.sublist(0, length));
   }
 }

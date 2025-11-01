@@ -176,6 +176,20 @@ class SocketService {
     return response;
   }
 
+  Future<Map<String, dynamic>> sendHandshakeInit({
+    required String dhePublicKey,
+    required String salt,
+  }) async {
+    return _sendAndWaitForResponse(
+      {
+        'action': 'handshake_init',
+        'dhe_public_key': dhePublicKey,
+        'salt': salt,
+      },
+      'handshake_response',
+    );
+  }
+
   //? funciona - amizade
   Future<Map<String, dynamic>> sendFriendRequest(String friendUsername) async {
     return _sendAndWaitForResponse(
