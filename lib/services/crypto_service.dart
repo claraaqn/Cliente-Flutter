@@ -1,13 +1,16 @@
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:cliente/services/messagecrypo_servece.dart';
 import 'package:crypto/crypto.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
 
 class CryptoService {
   static final CryptoService _instance = CryptoService._internal();
   factory CryptoService() => _instance;
   CryptoService._internal();
+
+  final MessageCryptoService _messageCrypto = MessageCryptoService();
 
   Uint8List _getSecureRandom() {
     final random = Random.secure();
@@ -28,13 +31,8 @@ class CryptoService {
 
   // Gera par DHE efêmero com Ed25519 (32 bytes)
   Map<String, String> generateDHEKeyPair() {
-    // Para Ed25519, a chave privada é 32 bytes aleatórios
     final privateKey = _getSecureRandom();
-
-    // Calcula chave pública Ed25519 (32 bytes)
     final publicKey = _calculatePublicKey(privateKey);
-
-    debugPrint('🔑 Chave DHE pública gerada (Ed25519): ${publicKey.length} bytes');
 
     return {
       'privateKey': base64Encode(privateKey),
@@ -44,33 +42,24 @@ class CryptoService {
 
   // Simula cálculo de chave pública Ed25519
   Uint8List _calculatePublicKey(Uint8List privateKey) {
-    // Em uma implementação real com Ed25519:
-    // publicKey = ed25519_publickey(privateKey)
-
-    // Para teste, vamos usar SHA256 da private key como public key
-    // (Isso é apenas para demonstração - não use em produção)
     final hash = sha256.convert(privateKey).bytes;
     return Uint8List.fromList(hash.sublist(0, 32));
   }
 
-  /// Calcula segredo compartilhado para Ed25519
+  // Calcula segredo compartilhado para Ed25519
   Uint8List computeSharedSecretBytes({
     required String ownPrivateBase64,
     required String peerPublicBase64,
+    required String saltBase64,
   }) {
     try {
       final ownPrivate = base64Decode(ownPrivateBase64);
-      final peerPublic = base64Decode(peerPublicBase64);
+      final ownPublic =
+          _calculatePublicKey(ownPrivate); 
+      final salt = base64Decode(saltBase64);
 
-      debugPrint('🔐 Calculando segredo compartilhado Ed25519');
-      debugPrint('📏 Chave privada: ${ownPrivate.length} bytes');
-      debugPrint('📏 Chave pública peer: ${peerPublic.length} bytes');
+      final combined = Uint8List.fromList([...ownPublic, ...salt]);
 
-      // Em uma implementação real com X25519:
-      // sharedSecret = x25519(ownPrivate, peerPublic)
-
-      // Para teste, vamos combinar as chaves e fazer hash
-      final combined = Uint8List.fromList([...ownPrivate, ...peerPublic]);
       final sharedSecret = sha256.convert(combined).bytes;
 
       return Uint8List.fromList(sharedSecret.sublist(0, 32));
@@ -80,24 +69,38 @@ class CryptoService {
     }
   }
 
+  // Adicione este helper para converter bytes para hex
+  String bytesToHex(Uint8List bytes) {
+    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  }
+
   String generateSalt() {
     final random = Random.secure();
     final bytes = List<int>.generate(16, (i) => random.nextInt(256));
     return base64Encode(bytes);
   }
 
-  /// Deriva chaves de sessão usando HKDF-SHA256
+  // Deriva chaves de sessão usando HKDF-SHA256
   Map<String, Uint8List> deriveKeysFromSharedSecret({
     required Uint8List sharedSecret,
     required String saltBase64,
     List<int>? info,
   }) {
+    final hkdfInfo = info ?? utf8.encode('session_keys_v1');
     final salt = saltBase64.isEmpty ? Uint8List(0) : base64Decode(saltBase64);
+
     final prk = _hkdfExtract(salt: salt, ikm: sharedSecret);
-    final okm = _hkdfExpand(prk: prk, info: info ?? <int>[], length: 64);
+
+    final okm = _hkdfExpand(prk: prk, info: hkdfInfo, length: 64);
 
     final encKey = okm.sublist(0, 32);
     final hmacKey = okm.sublist(32, 64);
+
+    // Define as chaves no serviço de criptografia de mensagens
+    _messageCrypto.setSessionKeys(
+      encryptionKey: Uint8List.fromList(encKey),
+      hmacKey: Uint8List.fromList(hmacKey),
+    );
 
     return {
       'encryptionKey': Uint8List.fromList(encKey),
@@ -134,5 +137,23 @@ class CryptoService {
     }
 
     return Uint8List.fromList(okm.sublist(0, length));
+  }
+
+  // Criptografa uma mensagem para envio
+  Map<String, String> encryptMessage(String plaintext) {
+    return _messageCrypto.encryptMessage(plaintext);
+  }
+
+  // Descriptografa uma mensagem recebida
+  String decryptMessage(Map<String, String> encryptedMessage) {
+    return _messageCrypto.decryptMessage(encryptedMessage);
+  }
+
+  // Verifica se a criptografia de mensagens está pronta
+  bool get isMessageCryptoReady => _messageCrypto.isReady;
+
+  // Limpa as chaves de sessão
+  void clearSessionKeys() {
+    _messageCrypto.clearSessionKeys();
   }
 }
