@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
+import 'package:cliente/services/crypto_service.dart';
 import 'package:flutter/widgets.dart';
 import 'package:cliente/services/local_storage_service.dart';
 
@@ -11,6 +12,10 @@ class SocketService {
   // Autenticação
   String? _userId;
   String? _username;
+
+  // Criptografia
+  final CryptoService _crypto = CryptoService();
+  bool _isEncryptionEnabled = false;
 
   // Stream de mensagens broadcast para listeners
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
@@ -123,6 +128,8 @@ class SocketService {
   void _handleDisconnect() {
     debugPrint('🔌 Conexão TCP fechada');
     _isConnected = false;
+    disableEncryption();
+    _crypto.clearSessionKeys();
   }
 
   //? tudo aqui cunciona - autenticação
@@ -176,11 +183,14 @@ class SocketService {
     return response;
   }
 
+// Modifique o método sendHandshakeInit
   Future<Map<String, dynamic>> sendHandshakeInit({
     required String dhePublicKey,
     required String salt,
+    required String dhePrivateKey,
   }) async {
-    return _sendAndWaitForResponse(
+    // Apenas envia o handshake, o processamento fica no HandshakeService
+    final response = await _sendAndWaitForResponse(
       {
         'action': 'handshake_init',
         'dhe_public_key': dhePublicKey,
@@ -188,6 +198,14 @@ class SocketService {
       },
       'handshake_response',
     );
+
+    if (response['success'] == true) {
+      final sessionId = response['data']['session_id'];
+      enableEncryption();
+      debugPrint('🛡️ Criptografia ativada - Session ID: $sessionId');
+    }
+
+    return response;
   }
 
   //? funciona - amizade
@@ -195,6 +213,7 @@ class SocketService {
     return _sendAndWaitForResponse(
       {
         'action': 'send_friend_request',
+        'sender_id': _userId,
         'receiver_username': friendUsername,
       },
       'send_friend_request_response',
@@ -261,8 +280,12 @@ class SocketService {
     debugPrint('💾 Mensagem salva localmente: $localId');
 
     try {
-      final response = await _sendAndWaitForResponse(
-        {
+      // Prepara a mensagem para envio (criptografada ou não)
+      final Map<String, dynamic> messageToSend;
+
+      if (_isEncryptionEnabled) {
+        // Criptografa a mensagem
+        final plainMessage = {
           'action': 'send_message',
           'receiver_username': receiverUsername,
           'content': content,
@@ -270,7 +293,31 @@ class SocketService {
           'sender_username': _username,
           'timestamp': DateTime.now().toIso8601String(),
           'local_id': localId,
-        },
+        };
+
+        final encryptedMessage =
+            _crypto.encryptMessage(json.encode(plainMessage));
+        messageToSend = {
+          'action': 'encrypted_message',
+          ...encryptedMessage,
+        };
+
+        debugPrint('🔒 Mensagem criptografada para envio');
+      } else {
+        // Mensagem não criptografada (antes do handshake)
+        messageToSend = {
+          'action': 'send_message',
+          'receiver_username': receiverUsername,
+          'content': content,
+          'sender_id': _userId,
+          'sender_username': _username,
+          'timestamp': DateTime.now().toIso8601String(),
+          'local_id': localId,
+        };
+      }
+
+      final response = await _sendAndWaitForResponse(
+        messageToSend,
         'send_message_response',
       );
 
@@ -364,12 +411,31 @@ class SocketService {
     );
 
     try {
-      final serverResponse = await _sendAndWaitForResponse(
-        {
+      // Prepara a requisição (criptografada ou não)
+      final Map<String, dynamic> request;
+
+      if (_isEncryptionEnabled) {
+        final plainRequest = {
           'action': 'get_conversation_history',
           'other_username': otherUsername,
           'limit': limit,
-        },
+        };
+
+        final encrypted = _crypto.encryptMessage(json.encode(plainRequest));
+        request = {
+          'action': 'encrypted_message',
+          ...encrypted,
+        };
+      } else {
+        request = {
+          'action': 'get_conversation_history',
+          'other_username': otherUsername,
+          'limit': limit,
+        };
+      }
+
+      final serverResponse = await _sendAndWaitForResponse(
+        request,
         'get_conversation_history_response',
       );
 
@@ -401,21 +467,6 @@ class SocketService {
     };
   }
 
-  Future<Map<String, dynamic>> cleanupDeliveredMessages(
-      String otherUsername) async {
-    if (!_isAuthenticated()) {
-      return {'success': false, 'message': 'Usuário não autenticado'};
-    }
-
-    return _sendAndWaitForResponse(
-      {
-        'action': 'cleanup_delivered_messages',
-        'other_username': otherUsername,
-      },
-      'cleanup_messages_response',
-    );
-  }
-
   Future<Map<String, dynamic>> _sendAndWaitForResponse(
     Map<String, dynamic> message,
     String expectedAction, {
@@ -424,12 +475,13 @@ class SocketService {
     if (!_isConnected && !await connect()) {
       return {
         'success': false,
+        
         'message': 'Não foi possível conectar ao servidor TCP',
       };
     }
 
     try {
-      final jsonMessage = json.encode(message) + '\n';
+      final jsonMessage = '${json.encode(message)}\n';
       _socket!.write(jsonMessage);
 
       final response = await _messageController.stream
@@ -457,33 +509,62 @@ class SocketService {
   }
 
   void _processRealTimeMessage(Map<String, dynamic> message) {
-    final action = message['action'];
-
-    debugPrint('🔔 Mensagem recebida no cliente: $message');
-
-    if (action == 'new_message') {
-      debugPrint(
-          '🔔 Nova mensagem em tempo real. De: ${message['sender_username']}. Para: ${message['receiver_username']}');
-
-      if (message['receiver_username'] == _username) {
-        debugPrint('✅ Mensagem é para este usuário');
-
-        _messageController.add(message);
-        debugPrint('✅ Nova mensagem enviada para o stream: ${message['id']}');
-
-        _saveMessageLocallyIfNeeded(message);
+    try {
+      // Verifica se é uma mensagem criptografada
+      if (_isEncryptionEnabled && _isEncryptedMessage(message)) {
+        debugPrint('🔓 Mensagem criptografada recebida, descriptografando...');
+        final decryptedMessage = _decryptReceivedMessage(message);
+        _messageController.add(decryptedMessage);
       } else {
-        debugPrint('❌ Mensagem não é para este usuário');
+        // Mensagem não criptografada ou antes do handshake
+        _messageController.add(message);
       }
-    } else if (action == 'user_typing') {
-      debugPrint(
-          '✍️ ${message['username']} está ${message['is_typing'] ? 'digitando' : 'parou'}');
-      _messageController.add(message);
-    } else if (action == 'user_online_status') {
-      debugPrint(
-          '🟢 Status online: ${message['username']} - ${message['is_online']}');
-      _messageController.add(message);
+    } catch (e) {
+      debugPrint('❌ Erro ao processar mensagem: $e');
+      // Envia mensagem de erro
+      _messageController.add({
+        'action': 'error',
+        'message': 'Erro ao processar mensagem: $e',
+        'success': false,
+      });
     }
+  }
+
+//! criptografia
+  bool _isEncryptedMessage(Map<String, dynamic> message) {
+    return message.containsKey('ciphertext') &&
+        message.containsKey('hmac') &&
+        message['action'] != 'handshake_response'; // Exceção para handshake
+  }
+
+  Map<String, dynamic> _decryptReceivedMessage(
+      Map<String, dynamic> encryptedMessage) {
+    try {
+      // Converte para Map<String, String> explicitamente
+      final encryptedPayload = {
+        'ciphertext': encryptedMessage['ciphertext'].toString(),
+        'hmac': encryptedMessage['hmac'].toString(),
+      };
+
+      final decryptedJson = _crypto.decryptMessage(encryptedPayload);
+      final decryptedMessage = json.decode(decryptedJson);
+
+      debugPrint('✅ Mensagem descriptografada com sucesso');
+      return decryptedMessage;
+    } catch (e) {
+      debugPrint('❌ Erro ao descriptografar mensagem: $e');
+      rethrow;
+    }
+  }
+
+  void enableEncryption() {
+    _isEncryptionEnabled = true;
+    debugPrint('🛡️ Criptografia de mensagens ATIVADA');
+  }
+
+  void disableEncryption() {
+    _isEncryptionEnabled = false;
+    debugPrint('🛡️ Criptografia de mensagens DESATIVADA');
   }
 
   Future<void> _saveMessageLocallyIfNeeded(Map<String, dynamic> message) async {
@@ -531,18 +612,24 @@ class SocketService {
   //! digitação
   void sendTypingStart(String receiverUsername) {
     if (!_isAuthenticated()) return;
-    _sendMessageNow({
+
+    final typingMessage = {
       'action': 'typing_start',
       'receiver_username': receiverUsername,
-    });
+    };
+
+    _sendMessageNow(typingMessage);
   }
 
   void sendTypingStop(String receiverUsername) {
     if (!_isAuthenticated()) return;
-    _sendMessageNow({
+
+    final typingMessage = {
       'action': 'typing_stop',
       'receiver_username': receiverUsername,
-    });
+    };
+
+    _sendMessageNow(typingMessage);
   }
 
   //?auxiliares - ok até onde eu sei
@@ -561,8 +648,23 @@ class SocketService {
     }
 
     try {
-      final jsonMessage = json.encode(message);
-      debugPrint('📤 Enviando: $jsonMessage');
+      final Map<String, dynamic> messageToSend;
+
+      if (_isEncryptionEnabled && message['action'] != 'handshake_init') {
+        // Criptografa mensagens após handshake (exceto handshake_init)
+        final encrypted = _crypto.encryptMessage(json.encode(message));
+        messageToSend = {
+          'action': 'encrypted_message',
+          ...encrypted,
+        };
+        debugPrint('🔒 Mensagem criptografada enviada: ${message['action']}');
+      } else {
+        messageToSend = message;
+      }
+
+      final jsonMessage = json.encode(messageToSend);
+      debugPrint(
+          '📤 Enviando: ${_isEncryptionEnabled ? '[CRIPTOGRAFADA]' : ''} $jsonMessage');
       _socket!.add(utf8.encode('$jsonMessage\n'));
     } catch (e) {
       debugPrint('❌ Erro ao enviar mensagem: $e');
@@ -574,12 +676,16 @@ class SocketService {
     }
   }
 
+  //gettrs
   Stream<Map<String, dynamic>> get messageStream => _messageController.stream;
   bool get isConnected => _isConnected;
+  bool get isEncryptionEnabled => _isEncryptionEnabled;
 
   void disconnect() {
     _socket?.close();
     _isConnected = false;
+    disableEncryption();
+    _crypto.clearSessionKeys();
     _messageController.close();
     debugPrint('🔌 Desconectado do servidor');
   }
