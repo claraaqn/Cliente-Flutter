@@ -19,7 +19,7 @@ class HandshakeService {
   Future<bool> initiateHandshake() async {
     try {
       // 1. Cliente gera par DHE efêmero
-      final dheKeyPair = _cryptoService.generateDHEKeyPair();
+      final dheKeyPair = await _cryptoService.generateDHEKeyPair();
       _dhePrivateKey = dheKeyPair['privateKey'];
       _dhePublicKey = dheKeyPair['publicKey'];
 
@@ -47,8 +47,8 @@ class HandshakeService {
       );
 
       // 6. Deriva chaves de sessão
-      _sessionKeys = _cryptoService.deriveKeysFromSharedSecret(
-        sharedSecret: sharedSecret,
+      _sessionKeys = await _cryptoService.deriveKeysFromSharedSecret(
+        sharedSecret: await sharedSecret,
         saltBase64: _sessionSalt!,
         info: utf8.encode('session_keys_v1'),
       );
