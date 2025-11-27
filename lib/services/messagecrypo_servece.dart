@@ -1,13 +1,14 @@
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
-import 'package:crypto/crypto.dart';
-import 'package:encrypt/encrypt.dart' as encrypt;
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter/material.dart';
 
 class MessageCryptoService {
   Uint8List? _encryptionKey;
   Uint8List? _hmacKey;
+
+  final _hmac = Hmac(Sha256());
 
   void setSessionKeys({
     required Uint8List encryptionKey,
@@ -18,7 +19,7 @@ class MessageCryptoService {
   }
 
   // Criptografa uma mensagem para envio (AES-CBC + HMAC)
-  Map<String, String> encryptMessage(String plaintext) {
+  Future<Map<String, String>> encryptMessage(String plaintext) async {
     if (_encryptionKey == null || _hmacKey == null) {
       throw Exception('Chaves de sessão não definidas');
     }
@@ -27,10 +28,10 @@ class MessageCryptoService {
       debugPrint('🔒 Criptografando mensagem: "$plaintext"');
 
       // 1. Cifrar a mensagem com AES-256 CBC
-      final encryptedData = _aesCbcEncrypt(plaintext, _encryptionKey!);
+      final encryptedData = await _aesCbcEncrypt(plaintext, _encryptionKey!);
 
       // 2. Criar HMAC da mensagem cifrada
-      final hmac = _computeHmac(encryptedData, _hmacKey!);
+      final hmac = await _computeHmac(encryptedData, _hmacKey!);
 
       final result = {
         'ciphertext': base64Encode(encryptedData),
@@ -45,8 +46,8 @@ class MessageCryptoService {
     }
   }
 
-  /// Descriptografa uma mensagem recebida
-  String decryptMessage(Map<String, String> encryptedMessage) {
+  // Descriptografa uma mensagem recebida
+  Future<String> decryptMessage(Map<String, String> encryptedMessage) async {
     if (_encryptionKey == null || _hmacKey == null) {
       throw Exception('Chaves de sessão não definidas');
     }
@@ -58,14 +59,14 @@ class MessageCryptoService {
       final receivedHmac = base64Decode(encryptedMessage['hmac']!);
 
       // 1. Verificar HMAC antes de descriptografar
-      final computedHmac = _computeHmac(ciphertext, _hmacKey!);
+      final computedHmac = await _computeHmac(ciphertext, _hmacKey!);
 
       if (!_compareHmac(receivedHmac, computedHmac)) {
         throw Exception('HMAC inválido - mensagem corrompida ou adulterada');
       }
 
       // 2. Descriptografar a mensagem
-      final plaintext = _aesCbcDecrypt(ciphertext, _encryptionKey!);
+      final plaintext = await _aesCbcDecrypt(ciphertext, _encryptionKey!);
 
       debugPrint('✅ Mensagem descriptografada: "$plaintext"');
       return plaintext;
@@ -75,55 +76,63 @@ class MessageCryptoService {
     }
   }
 
-  /// Cifra a mensagem com AES-256 em modo CBC
-  Uint8List _aesCbcEncrypt(String plaintext, Uint8List key) {
+  // Cifra a mensagem com AES-256 em modo CBC
+  Future<Uint8List> _aesCbcEncrypt(String plaintext, Uint8List key) async {
     try {
       // Gerar IV aleatório
       final iv = _generateRandomIV();
 
-      // Criar cifrador AES-CBC
-      final encrypter = encrypt.Encrypter(
-        encrypt.AES(encrypt.Key(key), mode: encrypt.AESMode.cbc),
+      final aesCbc = AesCbc.with256bits(macAlgorithm: MacAlgorithm.empty);
+
+      // Criar SecretBox
+      final secretBox = await aesCbc.encrypt(
+        utf8.encode(plaintext),
+        secretKey: SecretKey(key),
+        nonce: iv,
       );
 
-      // Criptografar (a biblioteca já aplica padding PKCS7)
-      final encrypted = encrypter.encrypt(plaintext, iv: encrypt.IV(iv));
-
-      // Combinar IV + ciphertext
-      return Uint8List.fromList([...iv, ...encrypted.bytes]);
+      // Apenas IV + ciphertext
+      return Uint8List.fromList([...iv, ...secretBox.cipherText]);
     } catch (e) {
       throw Exception('Erro na cifra AES-CBC: $e');
     }
   }
 
   // Decifra a mensagem com AES-256 CBC
-  String _aesCbcDecrypt(Uint8List encryptedData, Uint8List key) {
+  Future<String> _aesCbcDecrypt(Uint8List encryptedData, Uint8List key) async {
     try {
       // Extrair IV (primeiros 16 bytes) e ciphertext
       final iv = encryptedData.sublist(0, 16);
       final ciphertext = encryptedData.sublist(16);
 
-      // Criar decifrador AES-CBC
-      final encrypter = encrypt.Encrypter(
-        encrypt.AES(encrypt.Key(key), mode: encrypt.AESMode.cbc),
+      final aesCbc = AesCbc.with256bits(macAlgorithm: MacAlgorithm.empty);
+
+      final secretBox = SecretBox(
+        ciphertext,
+        nonce: iv,
+        mac: Mac.empty,
       );
 
-      // Descriptografar (a biblioteca remove padding PKCS7)
-      return encrypter.decrypt(
-        encrypt.Encrypted(ciphertext),
-        iv: encrypt.IV(iv),
+      // Descriptografar
+      final decryptedData = await aesCbc.decrypt(
+        secretBox,
+        secretKey: SecretKey(key),
       );
+
+      return utf8.decode(decryptedData);
     } catch (e) {
       throw Exception('Erro na decifra AES-CBC: $e');
     }
   }
 
   // Calcula HMAC-SHA256
-  Uint8List _computeHmac(Uint8List data, Uint8List key) {
+  Future<Uint8List> _computeHmac(Uint8List data, Uint8List key) async {
     try {
-      final hmac = Hmac(sha256, key);
-      final digest = hmac.convert(data);
-      return Uint8List.fromList(digest.bytes);
+      final mac = await _hmac.calculateMac(
+        data,
+        secretKey: SecretKey(key),
+      );
+      return Uint8List.fromList(mac.bytes);
     } catch (e) {
       throw Exception('Erro no cálculo HMAC: $e');
     }

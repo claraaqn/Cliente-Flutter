@@ -53,7 +53,7 @@ class AuthProvider with ChangeNotifier {
 
     try {
       // Gera chaves ECC
-      final keyPair = _cryptoService.generateKeyPair();
+      final keyPair = await _cryptoService.generateKeyPair();
       final publicKey = keyPair['publicKey']!;
       final privateKey = keyPair['privateKey']!;
 

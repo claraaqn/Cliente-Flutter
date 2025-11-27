@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cliente/services/crypto_service.dart';
+import 'package:cliente/services/messagecrypo_servece.dart';
 import 'package:cliente/services/socket_service.dart';
 import 'package:flutter/widgets.dart';
 
@@ -30,7 +31,6 @@ class HandshakeService {
       final response = await _socketService.sendHandshakeInit(
         dhePublicKey: _dhePublicKey!,
         salt: _sessionSalt!,
-        dhePrivateKey: _dhePrivateKey!,
       );
       if (!response['success']) {
         return false;
@@ -38,12 +38,12 @@ class HandshakeService {
 
       // 4. Recebe handshake_response do servidor
       final serverPublicKey = response['data']['server_public_key'];
+      final sessionId = response['data']['session_id'];
 
       // 5. Calcula segredo compartilhado
       final sharedSecret = _cryptoService.computeSharedSecretBytes(
         ownPrivateBase64: _dhePrivateKey!,
         peerPublicBase64: serverPublicKey,
-        saltBase64: _sessionSalt!,
       );
 
       // 6. Deriva chaves de sessão
@@ -52,6 +52,21 @@ class HandshakeService {
         saltBase64: _sessionSalt!,
         info: utf8.encode('session_keys_v1'),
       );
+
+      _cryptoService.setSessionKeys(
+        encryptionKey: sessionKeys!['encryption']!,
+        hmacKey: sessionKeys!['hmac']!,
+      );
+
+      _socketService.setSessionKeysDirectly(
+        sessionId: sessionId,
+        encryptionKey: sessionKeys!['encryption']!,
+        hmacKey: sessionKeys!['hmac']!,
+      );
+
+      debugPrint('✅ Handshake realizado - Chaves de sessão geradas');
+      debugPrint('   ENC: ${base64Encode(_sessionKeys!['encryption']!)}');
+      debugPrint('   HMAC: ${base64Encode(_sessionKeys!['hmac']!)}');
 
       debugPrint('✅ Handshake realizado - Chaves de sessão geradas');
       return true;
