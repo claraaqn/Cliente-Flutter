@@ -10,6 +10,7 @@ class CryptoService {
   factory CryptoService() => _instance;
   CryptoService._internal();
   final sha256 = Sha256();
+  final _x25519 = X25519();
 
   final MessageCryptoService _messageCrypto = MessageCryptoService();
 
@@ -20,27 +21,25 @@ class CryptoService {
   }
 
   // Gera um par de chaves ECC principais (para registro/login)
-  Map<String, String> generateKeyPair() {
+  Future<Map<String, String>> generateKeyPair() async {
     final privateKey = _getSecureRandom();
-    final publicKey = _calculatePublicKey(privateKey);
+    final publicKey = await _calculatePublicKey(privateKey);
 
     return {
       'privateKey': base64Encode(privateKey),
-      'publicKey': base64Encode(publicKey as List<int>),
+      'publicKey': base64Encode(publicKey),
     };
   }
 
   // Gera par DHE efêmero com X25519  (32 bytes)
   Future<Map<String, String>> generateDHEKeyPair() async {
-    final algorithm = X25519();
+    final keyPar = await _x25519.newKeyPair();
 
-    final keyPar = await algorithm.newKeyPair();
-
-    final privateKey = await keyPar.extractPrivateKeyBytes();
+    final privateKeyBytes = await keyPar.extractPrivateKeyBytes();
     final publicKey = await keyPar.extractPublicKey();
 
     return {
-      'privateKey': base64Encode(privateKey),
+      'privateKey': base64Encode(privateKeyBytes),
       'publicKey': base64Encode(publicKey.bytes),
     };
   }
@@ -55,19 +54,29 @@ class CryptoService {
   Future<Uint8List> computeSharedSecretBytes({
     required String ownPrivateBase64,
     required String peerPublicBase64,
-    required String saltBase64,
   }) async {
     try {
       final ownPrivate = base64Decode(ownPrivateBase64);
-      final ownPublic = await _calculatePublicKey(ownPrivate);
-      final salt = base64Decode(saltBase64);
+      final peerPublic = base64Decode(peerPublicBase64);
 
-      final combined = Uint8List.fromList([...ownPublic, ...salt]);
+      debugPrint('🔄 Calculando segredo compartilhado:');
+      debugPrint('   Chave privada: ${base64Encode(ownPrivate)}');
+      debugPrint('   Chave pública do peer: ${base64Encode(peerPublic)}');
 
-      final sharedSecret = await sha256.hash(combined);
-      final sharedSecretFinal = sharedSecret.bytes;
+      final keyPair = await _x25519.newKeyPairFromSeed(ownPrivate);
 
-      return Uint8List.fromList(sharedSecretFinal.sublist(0, 32));
+      final peerPublicKey =
+          SimplePublicKey(peerPublic, type: KeyPairType.x25519);
+
+      final sharedSecret = await _x25519.sharedSecretKey(
+        keyPair: keyPair,
+        remotePublicKey: peerPublicKey,
+      );
+
+      final secretBytesList = await sharedSecret.extractBytes();
+      final secretBytes = Uint8List.fromList(secretBytesList);
+
+      return secretBytes;
     } catch (e) {
       debugPrint('❌ Erro ao calcular segredo compartilhado: $e');
       rethrow;
@@ -82,39 +91,57 @@ class CryptoService {
   String generateSalt() {
     final random = Random.secure();
     final bytes = List<int>.generate(16, (i) => random.nextInt(256));
-    return base64Encode(bytes);
+    return base64Encode(Uint8List.fromList(bytes));
   }
 
   // Deriva chaves de sessão usando HKDF-SHA256
-   Future<Map<String, Uint8List>> deriveKeysFromSharedSecret({
+  Future<Map<String, Uint8List>> deriveKeysFromSharedSecret({
     required Uint8List sharedSecret,
     required String saltBase64,
-    List<int>? info,
+    required List<int> info,
   }) async {
-    final hkdfInfo = info ?? utf8.encode('session_keys_v1');
-    final salt = saltBase64.isEmpty ? Uint8List(0) : base64Decode(saltBase64);
+    try {
+      final salt = base64Decode(saltBase64);
 
-    final prk = await _hkdfExtract(salt: salt, ikm: sharedSecret);
+      debugPrint('🔑 Derivando chaves com HKDF:');
+      debugPrint('   Shared Secret: ${base64Encode(sharedSecret)}');
+      debugPrint('   Salt: $saltBase64');
+      debugPrint('   Info: ${utf8.decode(info)}');
 
-    final okm = await  _hkdfExpand(prk: prk, info: hkdfInfo, length: 64);
+      // Usar HKDF-SHA256
+      final hkdf = Hkdf(hmac: Hmac(Sha256()), outputLength: 64);
 
-    final encKey = okm.sublist(0, 32);
-    final hmacKey = okm.sublist(32, 64);
+      final keyMaterial = await hkdf.deriveKey(
+        secretKey: SecretKey(sharedSecret),
+        nonce: salt,
+        info: info,
+      );
 
-    // Define as chaves no serviço de criptografia de mensagens
-    _messageCrypto.setSessionKeys(
-      encryptionKey: Uint8List.fromList(encKey),
-      hmacKey: Uint8List.fromList(hmacKey),
-    );
+      final keyBytes = await keyMaterial.extractBytes();
 
-    return {
-      'encryptionKey': Uint8List.fromList(encKey),
-      'hmacKey': Uint8List.fromList(hmacKey),
-    };
+      final encryptionKey = Uint8List.fromList(keyBytes.sublist(0, 32));
+      final hmacKey = Uint8List.fromList(keyBytes.sublist(32, 64));
+
+      debugPrint('   Chaves derivadas:');
+      debugPrint(
+          '     ENC (${encryptionKey.length} bytes): ${base64Encode(encryptionKey)}');
+      debugPrint(
+          '     HMAC (${hmacKey.length} bytes): ${base64Encode(hmacKey)}');
+
+      return {
+        'encryption': encryptionKey,
+        'hmac': hmacKey,
+      };
+    } catch (e) {
+      debugPrint('❌ Erro ao derivar chaves: $e');
+      rethrow;
+    }
   }
 
-  Future<Uint8List> _hkdfExtract(
-      {required Uint8List salt, required Uint8List ikm}) async {
+  Future<Uint8List> _hkdfExtract({
+    required Uint8List salt,
+    required Uint8List ikm,
+  }) async {
     final hmac = Hmac(sha256);
     final secretBox = await hmac.calculateMac(
       ikm,
@@ -152,17 +179,25 @@ class CryptoService {
   }
 
   // Criptografa uma mensagem para envio
-  Map<String, String> encryptMessage(String plaintext) {
+  Future<Map<String, String>> encryptMessage(String plaintext) {
     return _messageCrypto.encryptMessage(plaintext);
   }
 
   // Descriptografa uma mensagem recebida
-  String decryptMessage(Map<String, String> encryptedMessage) {
+  Future<String> decryptMessage(Map<String, String> encryptedMessage) {
     return _messageCrypto.decryptMessage(encryptedMessage);
   }
 
   // Verifica se a criptografia de mensagens está pronta
   bool get isMessageCryptoReady => _messageCrypto.isReady;
+
+  void setSessionKeys(
+      {required Uint8List encryptionKey, required Uint8List hmacKey}) {
+    _messageCrypto.setSessionKeys(
+      encryptionKey: encryptionKey,
+      hmacKey: hmacKey,
+    );
+  }
 
   // Limpa as chaves de sessão
   void clearSessionKeys() {
