@@ -80,7 +80,7 @@ class LocalStorageService {
       debugPrint('💾 Mensagem salva localmente: ${message['id']}');
     } else {
       debugPrint(
-          '💾 Mensagem já existe: ${message['id']} - ignorando duplicata');
+          'Mensagem já existe: ${message['id']} - ignorando duplicata');
     }
   }
 
@@ -182,6 +182,61 @@ class LocalStorageService {
       debugPrint('Chave privada removida');
     } catch (e) {
       debugPrint('Erro ao remover chave privada: $e');
+    }
+  }
+
+  Future<void> saveUserCredentials(String username, String privateKey) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('username', username);
+      await prefs.setString('private_key', privateKey);
+      await prefs.setBool('has_credentials', true);
+      debugPrint('Credenciais salvas para usuário: $username');
+    } catch (e) {
+      debugPrint('Erro ao salvar credenciais: $e');
+      throw Exception('Falha ao salvar credenciais');
+    }
+  }
+
+  Future<Map<String, String>?> getUserCredentials() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final username = prefs.getString('username');
+      final privateKey = prefs.getString('private_key');
+
+      if (username != null && privateKey != null) {
+        debugPrint('Credenciais recuperadas para: $username');
+        return {
+          'username': username,
+          'privateKey': privateKey,
+        };
+      }
+      debugPrint('Nenhuma credencial encontrada');
+      return null;
+    } catch (e) {
+      debugPrint('Erro ao recuperar credenciais: $e');
+      return null;
+    }
+  }
+
+  Future<bool> hasCredentials() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getBool('has_credentials') ?? false;
+    } catch (e) {
+      debugPrint('Erro ao verificar credenciais: $e');
+      return false;
+    }
+  }
+
+  Future<void> clearUserCredentials() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('username');
+      await prefs.remove('private_key');
+      await prefs.remove('has_credentials');
+    } catch (e) {
+      debugPrint('Erro ao remover credenciais: $e');
     }
   }
 }

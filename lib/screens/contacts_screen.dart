@@ -1,5 +1,3 @@
-import 'dart:developer' as console;
-
 import 'package:cliente/screens/chat_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -68,10 +66,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
           _pendingRequestsCount = _pendingRequests.length;
         });
       } else {
-        console.log('❌ Erro ao carregar solicitações: ${response['message']}');
+        debugPrint('Erro ao carregar solicitações: ${response['message']}');
       }
     } catch (e) {
-      console.log('❌ Erro ao carregar solicitações pendentes: $e');
+      debugPrint('Erro ao carregar solicitações pendentes: $e');
     }
   }
 
@@ -452,8 +450,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
           : _buildContent(),
       floatingActionButton: FloatingActionButton(
         onPressed: _showAddFriendBottomSheet,
-        child: const Icon(Icons.person_add),
         tooltip: 'Adicionar amigo',
+        child: const Icon(Icons.person_add),
       ),
     );
   }

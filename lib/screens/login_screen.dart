@@ -110,6 +110,21 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final authProvider = Provider.of<AuthProvider>(context);
+
+    if (authProvider.isAutoLoggingIn) {
+      return const Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 20),
+              Text('Conectando automaticamente...'),
+            ],
+          ),
+        ),
+      );
+    }
     _updateState(authProvider);
 
     return Scaffold(

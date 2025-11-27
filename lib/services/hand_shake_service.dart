@@ -1,8 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
-
 import 'package:cliente/services/crypto_service.dart';
-import 'package:cliente/services/messagecrypo_servece.dart';
 import 'package:cliente/services/socket_service.dart';
 import 'package:flutter/widgets.dart';
 
@@ -64,14 +62,10 @@ class HandshakeService {
         hmacKey: sessionKeys!['hmac']!,
       );
 
-      debugPrint('✅ Handshake realizado - Chaves de sessão geradas');
-      debugPrint('   ENC: ${base64Encode(_sessionKeys!['encryption']!)}');
-      debugPrint('   HMAC: ${base64Encode(_sessionKeys!['hmac']!)}');
-
-      debugPrint('✅ Handshake realizado - Chaves de sessão geradas');
+      debugPrint('Handshake realizado - Chaves de sessão geradas');
       return true;
     } catch (e) {
-      debugPrint('❌ Erro no handshake: $e');
+      debugPrint('Erro no handshake: $e');
       return false;
     }
   }
