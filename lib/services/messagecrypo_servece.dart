@@ -53,8 +53,6 @@ class MessageCryptoService {
     }
 
     try {
-      debugPrint('🔓 Descriptografando mensagem...');
-
       final ciphertext = base64Decode(encryptedMessage['ciphertext']!);
       final receivedHmac = base64Decode(encryptedMessage['hmac']!);
 
@@ -68,10 +66,10 @@ class MessageCryptoService {
       // 2. Descriptografar a mensagem
       final plaintext = await _aesCbcDecrypt(ciphertext, _encryptionKey!);
 
-      debugPrint('✅ Mensagem descriptografada: "$plaintext"');
+      debugPrint('Mensagem descriptografada: "$plaintext"');
       return plaintext;
     } catch (e) {
-      debugPrint('❌ Erro ao descriptografar mensagem: $e');
+      debugPrint('Erro ao descriptografar mensagem: $e');
       rethrow;
     }
   }

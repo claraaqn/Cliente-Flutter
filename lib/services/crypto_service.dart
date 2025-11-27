@@ -11,24 +11,44 @@ class CryptoService {
   CryptoService._internal();
   final sha256 = Sha256();
   final _x25519 = X25519();
+  final _ed25519 = Ed25519();
 
   final MessageCryptoService _messageCrypto = MessageCryptoService();
 
-  Uint8List _getSecureRandom() {
-    final random = Random.secure();
-    final bytes = List<int>.generate(32, (i) => random.nextInt(256));
-    return Uint8List.fromList(bytes);
-  }
-
   // Gera um par de chaves ECC principais (para registro/login)
   Future<Map<String, String>> generateKeyPair() async {
-    final privateKey = _getSecureRandom();
-    final publicKey = await _calculatePublicKey(privateKey);
+    try {
+      final keyPair = await _ed25519.newKeyPair();
+      final privateKeyBytes = await keyPair.extractPrivateKeyBytes();
+      final publicKey = await keyPair.extractPublicKey();
 
-    return {
-      'privateKey': base64Encode(privateKey),
-      'publicKey': base64Encode(publicKey),
-    };
+      return {
+        'privateKey': base64Encode(privateKeyBytes),
+        'publicKey': base64Encode(publicKey.bytes),
+      };
+    } catch (e) {
+      debugPrint('Erro ao gerar par de chaves Ed25519: $e');
+      rethrow;
+    }
+  }
+
+  Future<Map<String, String>> generateKeyPairFromPrivate(
+      String privateKeyB64) async {
+    try {
+      final privateKeyBytes = base64Decode(privateKeyB64);
+
+      // Criar key pair a partir da seed usando Ed25519
+      final keyPair = await _ed25519.newKeyPairFromSeed(privateKeyBytes);
+      final publicKey = await keyPair.extractPublicKey();
+
+      return {
+        'privateKey': privateKeyB64,
+        'publicKey': base64Encode(publicKey.bytes),
+      };
+    } catch (e) {
+      debugPrint('Erro ao gerar key pair from private: $e');
+      rethrow;
+    }
   }
 
   // Gera par DHE efêmero com X25519  (32 bytes)
@@ -44,12 +64,6 @@ class CryptoService {
     };
   }
 
-  // Simula cálculo de chave pública
-  Future<Uint8List> _calculatePublicKey(Uint8List privateKey) async {
-    final hash = await sha256.hash(privateKey);
-    return Uint8List.fromList(hash.bytes.sublist(0, 32));
-  }
-
   // Calcula segredo compartilhado
   Future<Uint8List> computeSharedSecretBytes({
     required String ownPrivateBase64,
@@ -58,10 +72,6 @@ class CryptoService {
     try {
       final ownPrivate = base64Decode(ownPrivateBase64);
       final peerPublic = base64Decode(peerPublicBase64);
-
-      debugPrint('🔄 Calculando segredo compartilhado:');
-      debugPrint('   Chave privada: ${base64Encode(ownPrivate)}');
-      debugPrint('   Chave pública do peer: ${base64Encode(peerPublic)}');
 
       final keyPair = await _x25519.newKeyPairFromSeed(ownPrivate);
 
@@ -78,7 +88,7 @@ class CryptoService {
 
       return secretBytes;
     } catch (e) {
-      debugPrint('❌ Erro ao calcular segredo compartilhado: $e');
+      debugPrint('Erro ao calcular segredo compartilhado: $e');
       rethrow;
     }
   }
@@ -103,11 +113,6 @@ class CryptoService {
     try {
       final salt = base64Decode(saltBase64);
 
-      debugPrint('🔑 Derivando chaves com HKDF:');
-      debugPrint('   Shared Secret: ${base64Encode(sharedSecret)}');
-      debugPrint('   Salt: $saltBase64');
-      debugPrint('   Info: ${utf8.decode(info)}');
-
       // Usar HKDF-SHA256
       final hkdf = Hkdf(hmac: Hmac(Sha256()), outputLength: 64);
 
@@ -122,60 +127,14 @@ class CryptoService {
       final encryptionKey = Uint8List.fromList(keyBytes.sublist(0, 32));
       final hmacKey = Uint8List.fromList(keyBytes.sublist(32, 64));
 
-      debugPrint('   Chaves derivadas:');
-      debugPrint(
-          '     ENC (${encryptionKey.length} bytes): ${base64Encode(encryptionKey)}');
-      debugPrint(
-          '     HMAC (${hmacKey.length} bytes): ${base64Encode(hmacKey)}');
-
       return {
         'encryption': encryptionKey,
         'hmac': hmacKey,
       };
     } catch (e) {
-      debugPrint('❌ Erro ao derivar chaves: $e');
+      debugPrint('Erro ao derivar chaves: $e');
       rethrow;
     }
-  }
-
-  Future<Uint8List> _hkdfExtract({
-    required Uint8List salt,
-    required Uint8List ikm,
-  }) async {
-    final hmac = Hmac(sha256);
-    final secretBox = await hmac.calculateMac(
-      ikm,
-      secretKey: SecretKey(salt),
-    );
-    return Uint8List.fromList(secretBox.bytes);
-  }
-
-  Future<Uint8List> _hkdfExpand({
-    required Uint8List prk,
-    required List<int> info,
-    required int length,
-  }) async {
-    final hmac = Hmac(sha256);
-    final List<int> okm = [];
-    var previous = <int>[];
-    var iterations = (length / 32).ceil();
-
-    for (var i = 1; i <= iterations; i++) {
-      final input = <int>[];
-      if (previous.isNotEmpty) input.addAll(previous);
-      input.addAll(info);
-      input.add(i);
-
-      final secretBox = await hmac.calculateMac(
-        Uint8List.fromList(input),
-        secretKey: SecretKey(prk),
-      );
-      final t = secretBox.bytes;
-      okm.addAll(t);
-      previous = t;
-    }
-
-    return Uint8List.fromList(okm.sublist(0, length));
   }
 
   // Criptografa uma mensagem para envio
@@ -202,5 +161,54 @@ class CryptoService {
   // Limpa as chaves de sessão
   void clearSessionKeys() {
     _messageCrypto.clearSessionKeys();
+  }
+
+  Future<String> signData(Uint8List data, String privateKeyB64) async {
+    try {
+      final privateKeyBytes = base64Decode(privateKeyB64);
+
+      // Criar key pair a partir da seed
+      final keyPair = await _ed25519.newKeyPairFromSeed(privateKeyBytes);
+
+      // Assinar os dados
+      final signature = await _ed25519.sign(
+        data,
+        keyPair: keyPair,
+      );
+
+      return base64Encode(signature.bytes);
+    } catch (e) {
+      debugPrint('Erro ao assinar dados: $e');
+      rethrow;
+    }
+  }
+
+  Future<bool> verifySignature({
+    required Uint8List data,
+    required String signatureB64,
+    required String publicKeyB64,
+  }) async {
+    try {
+      final signatureBytes = base64Decode(signatureB64);
+      final publicKeyBytes = base64Decode(publicKeyB64);
+
+      // Criar objeto Signature
+      final signature = Signature(
+        signatureBytes,
+        publicKey: SimplePublicKey(publicKeyBytes, type: KeyPairType.ed25519),
+      );
+
+      // Verificar assinatura
+      final isVerified = await _ed25519.verify(
+        data,
+        signature: signature,
+      );
+
+      debugPrint(' Assinatura válida: $isVerified');
+      return isVerified;
+    } catch (e) {
+      debugPrint('Erro ao verificar assinatura: $e');
+      return false;
+    }
   }
 }
