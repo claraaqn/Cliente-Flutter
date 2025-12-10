@@ -248,11 +248,15 @@ class SocketService {
 
   //? funciona - amizade
   Future<Map<String, dynamic>> sendFriendRequest(String friendUsername) async {
+    final keys = await _crypto.generateDHEKeyPair();
+    final pubA = keys["publicKey"];
+
     return _sendAndWaitForResponse(
       {
         'action': 'send_friend_request',
         'sender_id': _userId,
         'receiver_username': friendUsername,
+        "dhe_public_sender": pubA
       },
       'send_friend_request_response',
     );
@@ -260,11 +264,16 @@ class SocketService {
 
   Future<Map<String, dynamic>> respondFriendRequest(
       int requestId, String responseType) async {
+
+    final keys = await _crypto.generateDHEKeyPair();
+    final pubB = keys["publicKey"];
+
     return _sendAndWaitForResponse(
       {
         'action': 'respond_friend_request',
         'request_id': requestId,
         'response': responseType,
+        "dhe_public": pubB
       },
       'respond_friend_request_response',
     );
@@ -336,7 +345,6 @@ class SocketService {
           'action': 'encrypted_message',
           ...encryptedMessage,
         };
-
       } else {
         // Mensagem não criptografada (antes do handshake)
         messageToSend = {
