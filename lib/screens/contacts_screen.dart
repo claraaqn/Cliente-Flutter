@@ -47,6 +47,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
         _handleRespondFriendRequestResponse(message);
       } else if (action == 'get_friends_list_response') {
         _handleFriendsListResponse(message);
+      } else if (action == "friend_request_accepted") {
+        _handleFriendRequestAccepted(message);
       }
     });
   }
@@ -113,13 +115,16 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final socketService = authProvider.socketService;
 
+    final userId = authProvider.userId;
+    debugPrint("ID de quem tá enviando o pedido de amizade $userId");
+
     setState(() {
       _isLoading = true;
       _errorMessage = '';
     });
 
     try {
-      final response = await socketService.sendFriendRequest(username);
+      final response = await socketService.sendFriendRequest(username, userId);
 
       if (response['success'] == true) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -143,15 +148,17 @@ class _ContactsScreenState extends State<ContactsScreen> {
     }
   }
 
-  Future<void> _acceptFriendRequest(int? requestId) async {
-    if (requestId == null) return;
+  Future<void> _acceptFriendRequest(int? reciverId) async {
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final socketService = authProvider.socketService;
+    final userId = authProvider.userId;
+
+    debugPrint("Id de quem responder o pedido de amizade $reciverId");
 
     try {
-      final response =
-          await socketService.respondFriendRequest(requestId, 'accepted');
+      final response = await socketService.respondFriendRequest(
+          reciverId, 'accepted', userId);
 
       if (response['success'] == true) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -234,6 +241,21 @@ class _ContactsScreenState extends State<ContactsScreen> {
         SnackBar(content: Text(response['message'] ?? 'Erro ao processar')),
       );
     }
+  }
+
+  void _handleFriendRequestAccepted(Map<String, dynamic> message) {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final socketService = authProvider.socketService;
+
+    final senderId = message["sender_id"];
+    final receiverPub = message["receiver_public_key"];
+    final receiverId = message["receiver_id"];
+
+    debugPrint("Id do sender $senderId");
+    debugPrint("Chave do reciver $receiverPub");
+    debugPrint("Id do request $receiverId");
+
+    socketService.handshakeFriends(senderId, receiverPub, receiverId);
   }
 
   void _handleFriendsListResponse(Map<String, dynamic> response) {

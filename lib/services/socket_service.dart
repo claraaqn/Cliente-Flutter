@@ -6,6 +6,7 @@ import 'package:cliente/services/crypto_service.dart';
 import 'package:cliente/services/messagecrypo_servece.dart';
 import 'package:flutter/widgets.dart';
 import 'package:cliente/services/local_storage_service.dart';
+import 'package:uuid/uuid.dart';
 
 class SocketService {
   Socket? _socket;
@@ -247,9 +248,13 @@ class SocketService {
   }
 
   //? funciona - amizade
-  Future<Map<String, dynamic>> sendFriendRequest(String friendUsername) async {
+  Future<Map<String, dynamic>> sendFriendRequest(
+      String friendUsername, int userId) async {
     final keys = await _crypto.generateDHEKeyPair();
     final pubA = keys["publicKey"];
+    final privA = keys["privateKey"];
+
+    await _localStorage.saveFriendRequestKeySender(userId, privA!);
 
     return _sendAndWaitForResponse(
       {
@@ -263,20 +268,70 @@ class SocketService {
   }
 
   Future<Map<String, dynamic>> respondFriendRequest(
-      int requestId, String responseType) async {
-
+      int reciverId, String responseType, int userId) async {
     final keys = await _crypto.generateDHEKeyPair();
     final pubB = keys["publicKey"];
+    final privB = keys["privateKey"];
+
+    final local = LocalStorageService();
+    await local.saveFriendRequestKeyReceiver(reciverId, privB!);
 
     return _sendAndWaitForResponse(
       {
         'action': 'respond_friend_request',
-        'request_id': requestId,
+        'reciverId': reciverId,
         'response': responseType,
         "dhe_public": pubB
       },
       'respond_friend_request_response',
     );
+  }
+
+  Future<Future<Map<String, dynamic>>> handshakeFriends(
+      int senderId, String receiverPub, int reciverId) async {
+    debugPrint('Começando HandShake');
+
+    final privA =
+        await _localStorage.getFriendRequestPrivateKeySender(senderId);
+
+    final sessionSalt = _crypto.generateSalt();
+    final sessionId = const Uuid().v4();
+
+    final sharedSecret = _crypto.computeSharedSecretBytes(
+      ownPrivateBase64: privA!,
+      peerPublicBase64: receiverPub,
+    );
+
+    final sessionKeys = await _crypto.deriveKeysFromSharedSecret(
+      sharedSecret: await sharedSecret,
+      saltBase64: sessionSalt,
+      info: utf8.encode('session_keys_v1'),
+    );
+
+    final encryptionKey = sessionKeys['encryption'];
+    final hmacKey = sessionKeys['hmac'];
+
+    String _convertKey(dynamic key) {
+      if (key is List<int>) {
+        return base64Encode(Uint8List.fromList(key));
+      } else if (key is String) {
+        return key;
+      } else {
+        return key.toString();
+      }
+    }
+
+    debugPrint('Handshake realizado - Chaves de sessão geradas');
+
+    return _sendAndWaitForResponse({
+      "action": "handshake_complete",
+      "reciverId": reciverId,
+      "session_id": sessionId,
+      "salt": sessionSalt,
+      "encryption_key":_convertKey(encryptionKey),
+      "hmac_key": _convertKey(hmacKey),
+      "shared_secret": base64Encode(await sharedSecret),
+    }, "handshake_finalizado");
   }
 
   Future<Map<String, dynamic>> getFriendRequests() async {

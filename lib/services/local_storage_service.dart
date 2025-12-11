@@ -79,8 +79,7 @@ class LocalStorageService {
 
       debugPrint('💾 Mensagem salva localmente: ${message['id']}');
     } else {
-      debugPrint(
-          'Mensagem já existe: ${message['id']} - ignorando duplicata');
+      debugPrint('Mensagem já existe: ${message['id']} - ignorando duplicata');
     }
   }
 
@@ -238,5 +237,47 @@ class LocalStorageService {
     } catch (e) {
       debugPrint('Erro ao remover credenciais: $e');
     }
+  }
+
+  // salvar a chave privada do sender
+  Future<void> saveFriendRequestKeySender(
+      int reciverId, String privateKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString("friend_req_${reciverId}_privA", privateKey);
+  }
+
+// salvar a chave privada do reciver
+  Future<void> saveFriendRequestKeyReceiver(
+      int reciverId, String privateKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString("friend_req_${reciverId}_privB", privateKey);
+  }
+
+  // salvar chave compartilhada
+  Future<void> saveSharedKey(int reciverId, String sharedKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString("shared_key_$reciverId", sharedKey);
+  }
+
+  Future<String?> getFriendRequestPrivateKeyReceiver(int reciverId) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString("friend_req_${reciverId}_privB");
+  }
+
+  Future<String?> getFriendRequestPrivateKeySender(int reciverId) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString("friend_req_${reciverId}_privA");
+  }
+
+  Future<String?> getSharedKey(int reciverId) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString("shared_key_$reciverId");
+  }
+
+  Future<void> clearHandshakeData(int reciverId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove("friend_req_${reciverId}_privA");
+    await prefs.remove("friend_req_${reciverId}_privB");
+    await prefs.remove("shared_key_$reciverId");
   }
 }

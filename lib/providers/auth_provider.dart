@@ -268,7 +268,7 @@ class AuthProvider with ChangeNotifier {
       // 5. Autenticação bem-sucedida
       final userData = verifyResponse['data']['user_data'];
       _isLoggedIn = true;
-      _userId = int.tryParse(userData['user_id']?.toString() ?? '');
+      _userId = _parseUserId(userData['user_id']);
       _username = userData['username']?.toString() ?? username;
 
       _errorMessage = '';
@@ -385,5 +385,25 @@ class AuthProvider with ChangeNotifier {
   void dispose() {
     _socketService.disconnect();
     super.dispose();
+  }
+
+  int? _parseUserId(dynamic userIdValue) {
+    if (userIdValue == null) return null;
+
+    try {
+      if (userIdValue is int) return userIdValue;
+      if (userIdValue is String) {
+        // Tenta converter string para int
+        return int.tryParse(userIdValue);
+      }
+      if (userIdValue is double) {
+        return userIdValue.toInt();
+      }
+      // Tenta converter para string e depois para int
+      return int.tryParse(userIdValue.toString());
+    } catch (e) {
+      debugPrint('Erro ao parser userId: $e, valor: $userIdValue');
+      return null;
+    }
   }
 }
