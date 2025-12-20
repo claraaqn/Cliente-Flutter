@@ -25,10 +25,14 @@ class Friend {
         (isOnlineRaw == 'true');
 
     return Friend(
-      idfriendship: json["id_friendship"],
-      id: json['user_id'],
-      username: json['username'],
-      createdAt: DateTime.parse(json['created_at']),
+      idfriendship: json["id_friendship"] ?? 0,
+      id: json['user_id'] ?? 0,
+      username: json['username'] ?? 'Usuário desconhecido',
+
+      createdAt: json['created_at'] != null
+          ? DateTime.parse(json['created_at'])
+          : DateTime.now(),
+
       isOnline: isOnline,
       lastSeen:
           json['last_seen'] != null ? DateTime.parse(json['last_seen']) : null,

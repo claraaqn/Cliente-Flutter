@@ -389,6 +389,7 @@ class SocketService {
       'content': content,
       'timestamp': DateTime.now().toIso8601String(),
       'local_id': localId,
+      'id_friendship': idFriendship,
     };
 
     try {
@@ -407,6 +408,7 @@ class SocketService {
         'sender_username': _username,
         'timestamp': DateTime.now().toIso8601String(),
         'local_id': localId,
+        'id_friendship': idFriendship,
       };
 
       // 4. CAMADA 1: Criptografia de Amigo (Ponta-a-Ponta)
@@ -528,22 +530,20 @@ class SocketService {
             '📨 ${pendingMessages.length} mensagens pendentes recebidas');
 
         for (final message in pendingMessages) {
-          // ✅ Aplica a descriptografia P2P em cada mensagem da lista
           final decryptedData = await _tryDecryptFriendLayer(message);
 
           final newMessage = {
             'action': 'new_message',
             'id': decryptedData['id'],
             'sender_id': decryptedData['sender_id'],
-            // receiver_id as vezes falta no JSON do servidor, garantimos aqui:
             'receiver_id': _authenticatedUserId,
             'content': decryptedData['content'],
             'timestamp': decryptedData['timestamp'],
             'is_delivered': true,
+            'id_friendship': decryptedData['id_friendship'],
           };
 
           _messageController.add(newMessage);
-          // ... (resto do seu código de confirmação)
 
           try {
             await _sendAndWaitForResponse(
@@ -712,24 +712,24 @@ class SocketService {
       Map<String, dynamic> message) async {
     final dynamic rawContent = message['content'];
 
-    // Se o conteúdo não for uma String ou não parecer um JSON, retorna original
     if (rawContent is! String || !rawContent.trim().startsWith('{'))
       return message;
 
     try {
       final Map<String, dynamic> contentMap = json.decode(rawContent);
 
-      // Verifica se possui a estrutura de criptografia {ciphertext, hmac}
       if (contentMap.containsKey('ciphertext') &&
           contentMap.containsKey('hmac')) {
-        // O remetente da mensagem é quem possui a chave que precisamos
-        final senderIdValue = message['sender_id'];
-        if (senderIdValue == null) return message;
+        final idValue = message['id_friendship'] ?? message['id_friendship'];
 
-        final int senderId = int.parse(senderIdValue.toString());
+        if (idValue == null) {
+          debugPrint("⚠️ id_friendship ausente no mapa da mensagem.");
+          return message;
+        }
 
-        // ✅ GARANTIA: Carrega chaves do cache/RAM antes de descriptografar
-        bool ready = await ensureSessionReady(senderId);
+        final int idFriendship = int.parse(idValue.toString());
+
+        bool ready = await ensureSessionReady(idFriendship);
 
         if (ready) {
           final Map<String, String> cryptoPayload = {
@@ -737,23 +737,18 @@ class SocketService {
             'hmac': contentMap['hmac'].toString(),
           };
 
-          // Descriptografa o conteúdo original (Texto Claro)
           final String decryptedText =
               await _crypto.decryptMessageFriend(cryptoPayload);
-
-          // Substitui o JSON feio pelo texto legível
           message['content'] = decryptedText;
-          debugPrint("🔓 Conteúdo P2P descriptografado com sucesso!");
+          debugPrint("🔓 Conteúdo P2P descriptografado: $decryptedText");
         } else {
           message['content'] =
               "🔒 Mensagem criptografada (Chaves indisponíveis)";
         }
       }
     } catch (e) {
-      // Se falhar o parse, provavelmente era apenas um texto normal que começava com '{'
-      debugPrint("Aviso: Conteúdo não era um pacote P2P válido.");
+      debugPrint("Aviso: Falha ao processar camada P2P: $e");
     }
-
     return message;
   }
 
