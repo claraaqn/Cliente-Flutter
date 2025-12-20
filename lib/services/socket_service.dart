@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
+import 'package:uuid/uuid.dart';
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:cliente/services/crypto_service.dart';
@@ -247,14 +248,18 @@ class SocketService {
   }
 
   //? funciona - amizade
-  Future<Map<String, dynamic>> sendFriendRequest(String friendUsername) async {
+  Future<Map<String, dynamic>> sendFriendRequest(String friendUsername, int userId) async {
     final keys = await _crypto.generateDHEKeyPair();
     final pubA = keys["publicKey"];
+    final priA = keys["privateKey"];
+
+    _localStorage.saveMyPrivateKeyDHE(userId, priA!);
+    _localStorage.saveMyPublicteKeyDHE(userId, pubA!);
 
     return _sendAndWaitForResponse(
       {
         'action': 'send_friend_request',
-        'sender_id': _userId,
+        'sender_id': userId,
         'receiver_username': friendUsername,
         "dhe_public_sender": pubA
       },
@@ -263,19 +268,73 @@ class SocketService {
   }
 
   Future<Map<String, dynamic>> respondFriendRequest(
-      int requestId, String responseType) async {
-
+      String responseType, int userId) async {
     final keys = await _crypto.generateDHEKeyPair();
     final pubB = keys["publicKey"];
+    final privB = keys["privateKey"];
+
+    _localStorage.saveMyPrivateKeyDHE(userId, privB!);
+    _localStorage.saveMyPublicteKeyDHE(userId, pubB!);
 
     return _sendAndWaitForResponse(
       {
         'action': 'respond_friend_request',
-        'request_id': requestId,
+        'reciverId': userId,
         'response': responseType,
-        "dhe_public": pubB
+        "dhe_public_reciver": pubB,
       },
       'respond_friend_request_response',
+    );
+  }
+
+  Future<Map<String, dynamic>> handshakeFriends(
+      int senderId, String receiverPub, int reciverId) async {
+    debugPrint('Começando HandShake');
+
+    _localStorage.saveFriendPublicKey(reciverId, receiverPub);
+
+    final privA =
+        await _localStorage.getMyPrivateKeyDH(senderId);
+
+    final sessionSalt = _crypto.generateSalt();
+    final sessionId = const Uuid().v4();
+
+    final sharedSecret = _crypto.computeSharedSecretBytes(
+      ownPrivateBase64: privA!,
+      peerPublicBase64: receiverPub,
+    );
+
+    final sessionKeys = await _crypto.deriveKeysFromSharedSecret(
+      sharedSecret: await sharedSecret,
+      saltBase64: sessionSalt,
+      info: utf8.encode('session_keys_v1'),
+    );
+
+    final encryptionKey = sessionKeys['encryption'];
+    final hmacKey = sessionKeys['hmac'];
+
+    String convertKey(dynamic key) {
+      if (key is List<int>) {
+        return base64Encode(Uint8List.fromList(key));
+      } else if (key is String) {
+        return key;
+      } else {
+        return key.toString();
+      }
+    }
+
+    debugPrint('Handshake realizado - Chaves de sessão geradas');
+
+    return _sendAndWaitForResponse({
+      "action": "handshake_complete",
+      "reciverId": reciverId,
+      "session_id": sessionId,
+      "salt": sessionSalt,
+      "encryption_key": convertKey(encryptionKey),
+      "hmac_key": convertKey(hmacKey),
+      "shared_secret": base64Encode(await sharedSecret),
+    }, 
+    "handshake_finalizado"
     );
   }
 
@@ -538,6 +597,16 @@ class SocketService {
       return response;
     } catch (e) {
       return {'success': false, 'message': 'Erro ao enviar/receber: $e'};
+    }
+  }
+
+  void sendMessageFriend(Map<String, dynamic> message) {
+    if (_socket != null) {
+      debugPrint("Enviando ação: ${message['action']}");
+      _socket!.write('${json.encode(message)}\n');
+    } else {
+      debugPrint(
+          "Erro: Socket desconectado ao tentar enviar ${message['action']}");
     }
   }
 
