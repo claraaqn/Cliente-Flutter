@@ -7,7 +7,6 @@ import 'package:cliente/services/crypto_service.dart';
 import 'package:cliente/services/messagecrypo_servece.dart';
 import 'package:flutter/widgets.dart';
 import 'package:cliente/services/local_storage_service.dart';
-import 'package:uuid/uuid.dart';
 
 class SocketService {
   Socket? _socket;
@@ -22,7 +21,6 @@ class SocketService {
   final CryptoService _crypto = CryptoService();
   final MessageCryptoService _messageCrypto = MessageCryptoService();
   bool _isEncryptionEnabled = false;
-  bool _isEncryptionFriendEnabled = false;
 
   // Stream de mensagens broadcast para listeners
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
@@ -314,9 +312,6 @@ class SocketService {
       info: utf8.encode('session_keys_v1'),
     );
 
-    final encryptionKey = sessionKeys['encryption'];
-    final hmacKey = sessionKeys['hmac'];
-
     final encBase64 = base64Encode(sessionKeys['encryption']!);
     final hmacBase64 = base64Encode(sessionKeys['hmac']!);
 
@@ -332,7 +327,6 @@ class SocketService {
       encryptionKey: sessionKeys['encryption']!,
       hmacKey: sessionKeys['hmac']!,
     );
-    _isEncryptionFriendEnabled = true;
 
     debugPrint('Handshake realizado - Chaves de sessão geradas');
 
@@ -485,7 +479,6 @@ class SocketService {
   Future<bool> ensureSessionReady(int idFriendship) async {
     // 1. Verifica se já está na RAM (Rápido)
     if (_crypto.isFriendSessionReady) {
-      _isEncryptionFriendEnabled = true;
       return true;
     }
 
@@ -499,7 +492,6 @@ class SocketService {
           encryptionKey: base64Decode(keys['encryption']!),
           hmacKey: base64Decode(keys['hmac']!),
         );
-        _isEncryptionFriendEnabled = true;
         debugPrint("✅ Chaves restauradas com sucesso!");
         return true;
       } catch (e) {
@@ -790,29 +782,6 @@ class SocketService {
   void disableEncryption() {
     _isEncryptionEnabled = false;
     debugPrint('🛡️ Criptografia de mensagens DESATIVADA');
-  }
-
-  Future<void> _saveMessageLocallyIfNeeded(Map<String, dynamic> message) async {
-    try {
-      final messageId = message['id'];
-
-      final existingMessages = await _localStorage.getLocalConversationHistory(
-        message['sender_username'],
-        100,
-      );
-
-      final isDuplicate =
-          existingMessages.any((msg) => msg['server_id'] == messageId);
-
-      if (!isDuplicate) {
-        await _localStorage.saveReceivedMessage(message);
-        debugPrint('Mensagem em tempo real salva localmente: $messageId');
-      } else {
-        debugPrint('Mensagem em tempo real duplicada ignorada: $messageId');
-      }
-    } catch (e) {
-      debugPrint('Erro ao salvar mensagem localmente: $e');
-    }
   }
 
   Future<Map<String, dynamic>> checkUserOnlineStatus(String username) async {
