@@ -280,4 +280,55 @@ class LocalStorageService {
     await prefs.remove("friend_req_${reciverId}_privB");
     await prefs.remove("shared_key_$reciverId");
   }
+
+    Future<void> saveMyPrivateKeyDHE(int myID, String privateKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString("my_priv_DHE$myID", privateKey);
+  }
+
+    Future<String?> getMyPrivateKeyDH(int myID) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString("my_priv_DHE$myID");
+  }
+
+    Future<void> saveMyPublicteKeyDHE(int myID, String publicKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString("my_pub_DHE$myID", publicKey);
+  }
+
+  Future<String?> getMyPublicKeyDHE(int myID) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString("my_pub_DHE$myID");
+  }
+
+// autenticação 
+  Future<void> saveMyPrivateKey(int myID, String privateKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString("my_priv_ed25519$myID", privateKey);
+  }
+
+  Future<String?> getMyPrivateKey(int myID) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString("my_priv_ed25519$myID");
+  }
+
+  Future<void> saveMyPublicteKey(int myID, String publicKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString("my_pub_ed25519$myID", publicKey);
+  }
+
+  Future<String?> getMyPublicKey(int myID) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString("my_pub_ed25519$myID");
+  }
+
+  Future<void> saveFriendPublicKey(int friendId, String publicKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString("friend_pub_ed25519$friendId", publicKey);
+  }
+
+  Future<String?> getFriendPublicKey(int friendId) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString("friend_pub_ed25519$friendId");
+  }
 }

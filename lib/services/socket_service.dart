@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
+import 'package:uuid/uuid.dart';
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:cliente/services/crypto_service.dart';
@@ -248,18 +249,18 @@ class SocketService {
   }
 
   //? funciona - amizade
-  Future<Map<String, dynamic>> sendFriendRequest(
-      String friendUsername, int userId) async {
+  Future<Map<String, dynamic>> sendFriendRequest(String friendUsername, int userId) async {
     final keys = await _crypto.generateDHEKeyPair();
     final pubA = keys["publicKey"];
-    final privA = keys["privateKey"];
+    final priA = keys["privateKey"];
 
-    await _localStorage.saveFriendRequestKeySender(userId, privA!);
+    _localStorage.saveMyPrivateKeyDHE(userId, priA!);
+    _localStorage.saveMyPublicteKeyDHE(userId, pubA!);
 
     return _sendAndWaitForResponse(
       {
         'action': 'send_friend_request',
-        'sender_id': _userId,
+        'sender_id': userId,
         'receiver_username': friendUsername,
         "dhe_public_sender": pubA
       },
@@ -268,31 +269,33 @@ class SocketService {
   }
 
   Future<Map<String, dynamic>> respondFriendRequest(
-      int reciverId, String responseType, int userId) async {
+      String responseType, int userId) async {
     final keys = await _crypto.generateDHEKeyPair();
     final pubB = keys["publicKey"];
     final privB = keys["privateKey"];
 
-    final local = LocalStorageService();
-    await local.saveFriendRequestKeyReceiver(reciverId, privB!);
+    _localStorage.saveMyPrivateKeyDHE(userId, privB!);
+    _localStorage.saveMyPublicteKeyDHE(userId, pubB!);
 
     return _sendAndWaitForResponse(
       {
         'action': 'respond_friend_request',
-        'reciverId': reciverId,
+        'reciverId': userId,
         'response': responseType,
-        "dhe_public": pubB
+        "dhe_public_reciver": pubB,
       },
       'respond_friend_request_response',
     );
   }
 
-  Future<Future<Map<String, dynamic>>> handshakeFriends(
+  Future<Map<String, dynamic>> handshakeFriends(
       int senderId, String receiverPub, int reciverId) async {
     debugPrint('Começando HandShake');
 
+    _localStorage.saveFriendPublicKey(reciverId, receiverPub);
+
     final privA =
-        await _localStorage.getFriendRequestPrivateKeySender(senderId);
+        await _localStorage.getMyPrivateKeyDH(senderId);
 
     final sessionSalt = _crypto.generateSalt();
     final sessionId = const Uuid().v4();
@@ -311,7 +314,7 @@ class SocketService {
     final encryptionKey = sessionKeys['encryption'];
     final hmacKey = sessionKeys['hmac'];
 
-    String _convertKey(dynamic key) {
+    String convertKey(dynamic key) {
       if (key is List<int>) {
         return base64Encode(Uint8List.fromList(key));
       } else if (key is String) {
@@ -328,10 +331,12 @@ class SocketService {
       "reciverId": reciverId,
       "session_id": sessionId,
       "salt": sessionSalt,
-      "encryption_key":_convertKey(encryptionKey),
-      "hmac_key": _convertKey(hmacKey),
+      "encryption_key": convertKey(encryptionKey),
+      "hmac_key": convertKey(hmacKey),
       "shared_secret": base64Encode(await sharedSecret),
-    }, "handshake_finalizado");
+    }, 
+    "handshake_finalizado"
+    );
   }
 
   Future<Map<String, dynamic>> getFriendRequests() async {
@@ -593,6 +598,16 @@ class SocketService {
       return response;
     } catch (e) {
       return {'success': false, 'message': 'Erro ao enviar/receber: $e'};
+    }
+  }
+
+  void sendMessageFriend(Map<String, dynamic> message) {
+    if (_socket != null) {
+      debugPrint("Enviando ação: ${message['action']}");
+      _socket!.write('${json.encode(message)}\n');
+    } else {
+      debugPrint(
+          "Erro: Socket desconectado ao tentar enviar ${message['action']}");
     }
   }
 
