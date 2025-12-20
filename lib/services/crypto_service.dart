@@ -14,6 +14,7 @@ class CryptoService {
   final _ed25519 = Ed25519();
 
   final MessageCryptoService _messageCrypto = MessageCryptoService();
+  final MessageCryptoService _messageCryptofriends = MessageCryptoService();
 
   // Gera um par de chaves ECC principais (para registro/login)
   Future<Map<String, String>> generateKeyPair() async {
@@ -157,6 +158,25 @@ class CryptoService {
       hmacKey: hmacKey,
     );
   }
+
+  void setSessionKeysFriends(
+      {required Uint8List encryptionKey, required Uint8List hmacKey}) {
+    _messageCryptofriends.setSessionKeys(
+      encryptionKey: encryptionKey,
+      hmacKey: hmacKey,
+    );
+  }
+
+  Future<Map<String, String>> encryptMessageFriend(String plaintext) {
+    return _messageCryptofriends.encryptMessage(plaintext);
+  }
+
+  // Descriptografa uma mensagem recebida
+  Future<String> decryptMessageFriend(Map<String, String> encryptedMessage) {
+    return _messageCryptofriends.decryptMessage(encryptedMessage);
+  }
+
+  bool get isFriendSessionReady => _messageCryptofriends.isReady;
 
   // Limpa as chaves de sessão
   void clearSessionKeys() {

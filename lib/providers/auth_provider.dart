@@ -133,6 +133,11 @@ class AuthProvider with ChangeNotifier {
           _userId = int.tryParse(userData['user_id']?.toString() ?? '');
           _username = userData['username']?.toString() ?? username;
 
+          if (_userId != null) {
+            await _localStorageService.initForUser(_userId!);
+            await _localStorageService.saveUserId(_userId!);
+          }
+
           final privateKey = await _localStorageService.getPrivateKey();
           if (privateKey != null) {
             await _localStorageService.saveUserCredentials(
@@ -162,7 +167,6 @@ class AuthProvider with ChangeNotifier {
 
   Future<void> _initializeAutoLogin() async {
     try {
-      // Verificar se há credenciais salvas
       final hasCredentials = await _localStorageService.hasCredentials();
 
       if (hasCredentials) {
@@ -208,6 +212,11 @@ class AuthProvider with ChangeNotifier {
 
       if (success) {
         debugPrint('Autenticação automática bem-sucedida!');
+        
+        if (_userId != null) {
+           await _localStorageService.initForUser(_userId!);
+        }
+
         await Future.delayed(const Duration(milliseconds: 100));
       } else {
         throw Exception('Autenticação por desafio falhou');
@@ -270,6 +279,12 @@ class AuthProvider with ChangeNotifier {
       _isLoggedIn = true;
       _userId = _parseUserId(userData['user_id']);
       _username = userData['username']?.toString() ?? username;
+
+      if (_userId != null) {
+        await _localStorageService.initForUser(_userId!);
+      } else {
+        debugPrint('❌ Erro crítico: UserId é nulo após login!');
+      }
 
       _errorMessage = '';
       _isLoading = false;

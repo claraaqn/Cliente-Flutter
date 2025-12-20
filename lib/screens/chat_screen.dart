@@ -1,5 +1,4 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cliente/database_helper.dart';
@@ -141,15 +140,21 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _saveMessageLocally(Message message) async {
+    if (_localStorage == null) return; // Proteção extra
+
     try {
       final chatMessage = ChatMessage(
         from: message.senderId.toString(),
         content: message.content,
         timestamp: message.timestamp,
       );
+
+      // Use o serviço em vez da instância estática direta se possível,
+      // ou garanta que o _localStorage.initForUser já rodou (o que fizemos acima)
       await DatabaseHelper.instance
           .insertMessage(chatMessage, widget.friend.username);
-      debugPrint('💾 Mensagem salva localmente: ${message.content}');
+
+      debugPrint('💾 Mensagem salva localmente');
     } catch (e) {
       debugPrint('❌ Erro ao salvar mensagem localmente: $e');
     }
@@ -351,8 +356,15 @@ class _ChatScreenState extends State<ChatScreen> {
         content: text,
         timestamp: now,
       );
-      await DatabaseHelper.instance
-          .insertMessage(sentMessage, widget.friend.username);
+      try {
+        await DatabaseHelper.instance
+            .insertMessage(sentMessage, widget.friend.username);
+        debugPrint('💾 Mensagem salva localmente com sucesso.');
+      } catch (e) {
+        debugPrint(
+            '⚠️ AVISO: Falha ao salvar no banco local (O banco foi inicializado?): $e');
+        // Não damos return aqui, deixamos o código continuar para enviar a mensagem online
+      }
 
       if (mounted) {
         setState(() {
@@ -377,8 +389,10 @@ class _ChatScreenState extends State<ChatScreen> {
       _scrollToBottom();
 
       final socketService = authProvider.socketService;
-      final response =
-          await socketService.sendMessage(widget.friend.username, text);
+      debugPrint("Id da amizade ${widget.friend.idfriendship}");
+      
+      final response = await socketService.sendMessage(
+          widget.friend.username, text, widget.friend.idfriendship);
 
       if (response['success'] == true) {
         debugPrint('✅ Mensagem enviada para o servidor');
