@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:cliente/database_helper.dart';
-import 'package:cliente/models/chat_models.dart';
 import 'package:cliente/models/friend.dart';
 import 'package:cliente/models/message.dart';
 import 'package:cliente/providers/auth_provider.dart';
@@ -40,7 +38,9 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     debugPrint('🚀 ChatScreen iniciado para: ${widget.friend.username}');
-    _initializeChat();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeData();
+    });
   }
 
   @override
@@ -52,64 +52,67 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _initializeData() async {
+    _localStorage = Provider.of<LocalStorageService>(context, listen: false);
+    _initializeChat();
+    await _loadLocalMessages();
+    if (mounted && _isLoading) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+    _syncUnsentMessages();
+    _checkPendingMessages();
+  }
+
   void _initializeChat() {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final socketService = authProvider.socketService;
 
     _messageSubscription = socketService.messageStream.listen((message) {
-      _handleIncomingMessage(message);
-    });
+      if (!mounted) return;
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadLocalMessages();
-      _syncUnsentMessages();
-      _checkPendingMessages();
+      final action = message['action'];
+
+      if (action == 'new_message') {
+        _handleNewMessage(message);
+      } else if (action == 'user_typing') {
+        _handleTypingIndicator(message);
+      } else if (action == 'user_online_status') {
+        _handleOnlineStatus(message);
+      }
     });
   }
 
 //! mensagens
-  void _handleIncomingMessage(Map<String, dynamic> message) {
-    final action = message['action'];
-    debugPrint('📨 Mensagem recebida: $action');
-
-    switch (action) {
-      case 'new_message':
-        _handleNewMessage(message);
-        break;
-      case 'user_typing':
-        _handleTypingIndicator(message);
-        break;
-      case 'user_online_status':
-        _handleOnlineStatus(message);
-        break;
-    }
-  }
 
   void _handleNewMessage(Map<String, dynamic> message) {
     try {
+      final content = message['content'];
+      if (content is String &&
+          content.contains('ciphertext') &&
+          content.contains('hmac')) {
+        debugPrint(
+            "⏳ Ignorando pacote criptografado bruto. Aguardando versão descriptografada...");
+        return;
+      }
+
       final currentUserId =
           Provider.of<AuthProvider>(context, listen: false).userId;
-      debugPrint('📨 Processando nova mensagem: ${message['content']}');
-
       final newMessage = _createMessageFromMap(message, currentUserId);
 
       if (newMessage != null) {
-        debugPrint(
-            '✅ Mensagem criada: "${newMessage.content}" - ID: ${newMessage.id}');
-
+        // Verifica duplicatas pelo ID ou conteúdo+tempo
         final isDuplicate = _messages.any((msg) {
+          if (msg.id != null && newMessage.id != null) {
+            return msg.id == newMessage.id;
+          }
           final timeDiff =
               msg.timestamp.difference(newMessage.timestamp).inSeconds.abs();
-          final isDuplicateByContent = msg.content == newMessage.content &&
+
+          return msg.content == newMessage.content &&
               msg.senderId == newMessage.senderId &&
-              timeDiff < 3;
-
-          if (isDuplicateByContent) {
-            debugPrint(
-                '⚠️ Duplicata detectada: "${msg.content}" - timeDiff: $timeDiff segundos');
-          }
-
-          return isDuplicateByContent;
+              timeDiff < 2;
         });
 
         if (!isDuplicate) {
@@ -118,20 +121,13 @@ class _ChatScreenState extends State<ChatScreen> {
               _messages.add(newMessage);
               _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
             });
-            _scrollToBottom();
-            debugPrint('✅ Nova mensagem ADICIONADA: "${newMessage.content}"');
-            debugPrint('📊 Total de mensagens: ${_messages.length}');
 
-            for (var i = 0; i < _messages.length; i++) {
-              debugPrint(
-                  '🔄 Ordem [$i]: "${_messages[i].content}" - ${_messages[i].timestamp}');
-            }
+            Future.delayed(const Duration(milliseconds: 100), _scrollToBottom);
 
             _saveMessageLocally(newMessage);
           }
         } else {
-          debugPrint('⚠️ Mensagem duplicada IGNORADA: "${newMessage.content}"');
-          _saveMessageLocally(newMessage);
+          debugPrint('⚠️ Mensagem duplicada ignorada (UI já atualizada)');
         }
       }
     } catch (e) {
@@ -269,15 +265,22 @@ class _ChatScreenState extends State<ChatScreen> {
       final currentUserId =
           Provider.of<AuthProvider>(context, listen: false).userId;
 
-      final now = DateTime.now();
-
       final messagesList = localMessages.map((msgData) {
+        DateTime messageDate;
+        try {
+          messageDate = DateTime.parse(msgData['timestamp']);
+        } catch (e) {
+          messageDate = DateTime.now(); 
+        }
+
         return Message(
           id: msgData['server_id'] ?? msgData['local_id']?.hashCode,
           senderId: msgData['sender_id'],
-          receiverId: widget.friend.id, // Valor fallback
+          receiverId: widget.friend.id,
           content: msgData['content'],
-          timestamp: now,
+
+          timestamp: messageDate,
+
           isDelivered: msgData['is_delivered'] == 1,
           isMine: msgData['sender_id'] == currentUserId,
           localId: msgData['local_id'],
@@ -286,6 +289,7 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       }).toList();
 
+      // Agora a ordenação vai funcionar porque as datas são diferentes
       messagesList.sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
       if (mounted) {
@@ -294,18 +298,23 @@ class _ChatScreenState extends State<ChatScreen> {
             _messages.addAll(messagesList);
           } else {
             for (final localMsg in messagesList) {
-              final exists = _messages.any((existingMsg) =>
-                  existingMsg.content == localMsg.content &&
-                  existingMsg.timestamp
-                          .difference(localMsg.timestamp)
-                          .inSeconds
-                          .abs() <
-                      3);
+              final exists = _messages.any((existingMsg) {
+                if (existingMsg.id != null && localMsg.id != null) {
+                  return existingMsg.id == localMsg.id;
+                }
+                return existingMsg.content == localMsg.content &&
+                    existingMsg.timestamp
+                            .difference(localMsg.timestamp)
+                            .inSeconds
+                            .abs() <
+                        2;
+              });
 
               if (!exists) {
                 _messages.add(localMsg);
               }
             }
+            // Reordena tudo no final
             _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
           }
         });
@@ -358,12 +367,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final now = DateTime.now();
 
     try {
-      final sentMessage = ChatMessage(
-        from: currentUserId.toString(),
-        content: text,
-        timestamp: now,
-      );
-
       if (mounted) {
         setState(() {
           _messages.add(Message(
@@ -387,7 +390,6 @@ class _ChatScreenState extends State<ChatScreen> {
       _scrollToBottom();
 
       final socketService = authProvider.socketService;
-      debugPrint("Id da amizade ${widget.friend.idfriendship}");
 
       final response = await socketService.sendMessage(
           widget.friend.username, text, widget.friend.idfriendship);
@@ -503,15 +505,13 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients && _messages.isNotEmpty) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
-    });
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        0.0, // Com reverse:true, 0.0 é o fundo da lista
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
   }
 
   //? definiciões do front
@@ -534,108 +534,93 @@ class _ChatScreenState extends State<ChatScreen> {
     return 'Visto em ${lastSeen.day}/${lastSeen.month}/${lastSeen.year}';
   }
 
-  Widget _buildMessageBubble(Message message) {
+  Widget _buildWhatsAppBubble(Message message) {
     final isMe = message.isMine;
-    debugPrint('🎨 BUILDING BUBBLE: "${message.content}" - isMine: $isMe');
 
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-      child: Row(
-        mainAxisAlignment:
-            isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
-        children: [
-          if (!isMe)
-            CircleAvatar(
-              radius: 16,
-              backgroundColor: Colors.blue[100],
-              child: Text(
-                widget.friend.username[0].toUpperCase(),
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.blue,
-                ),
-              ),
+    return Align(
+      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: EdgeInsets.only(
+          top: 4,
+          bottom: 4,
+          left: isMe ? 50 : 0, // Dá espaço para não encostar na borda oposta
+          right: isMe ? 0 : 50,
+        ),
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
+        decoration: BoxDecoration(
+          // Cores inspiradas no modo claro do WhatsApp
+          color: isMe ? const Color(0xFFDCF8C6) : Colors.white,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(12),
+            topRight: const Radius.circular(12),
+            bottomLeft: Radius.circular(isMe ? 12 : 0),
+            bottomRight: Radius.circular(isMe ? 0 : 12),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 2,
+              offset: const Offset(0, 1),
             ),
-          Flexible(
-            child: Container(
-              margin: EdgeInsets.only(
-                left: isMe ? 60 : 8,
-                right: isMe ? 8 : 60,
-              ),
-              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
-              decoration: BoxDecoration(
-                color: isMe ? Colors.blue[500] : Colors.grey[200],
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(18),
-                  topRight: const Radius.circular(18),
-                  bottomLeft: isMe
-                      ? const Radius.circular(18)
-                      : const Radius.circular(4),
-                  bottomRight: isMe
-                      ? const Radius.circular(4)
-                      : const Radius.circular(18),
+          ],
+        ),
+        child: IntrinsicWidth(
+          // Ajusta a largura ao conteúdo
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Container(
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.of(context).size.width * 0.7,
+                ),
+                child: Text(
+                  message.content,
+                  style: const TextStyle(color: Colors.black87, fontSize: 16),
                 ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              const SizedBox(height: 2),
+              Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    message.content,
-                    style: TextStyle(
-                      color: isMe ? Colors.white : Colors.black87,
-                      fontSize: 16,
+                    _formatTime(message.timestamp),
+                    style: const TextStyle(color: Colors.grey, fontSize: 11),
+                  ),
+                  if (isMe) ...[
+                    const SizedBox(width: 4),
+                    Icon(
+                      message.isDelivered ? Icons.done_all : Icons.done,
+                      size: 14,
+                      color: message.isDelivered ? Colors.blue : Colors.grey,
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        _formatTime(message.timestamp),
-                        style: TextStyle(
-                          color: isMe ? Colors.white70 : Colors.grey[600],
-                          fontSize: 10,
-                        ),
-                      ),
-                      if (isMe) ...[
-                        const SizedBox(width: 4),
-                        Icon(
-                          message.hasError
-                              ? Icons.error
-                              : (message.isDelivered
-                                  ? Icons.done_all
-                                  : Icons.done),
-                          size: 12,
-                          color: message.hasError
-                              ? Colors.red[200]
-                              : (message.isDelivered
-                                  ? Colors.white70
-                                  : Colors.white30),
-                        ),
-                      ],
-                    ],
-                  ),
+                  ],
                 ],
               ),
-            ),
+            ],
           ),
-          if (isMe)
-            CircleAvatar(
-              radius: 16,
-              backgroundColor: Colors.green[100],
-              child: Icon(Icons.person, size: 16, color: Colors.green[700]),
-            ),
-        ],
+        ),
       ),
+    );
+  }
+
+  Widget _buildChatList() {
+    // Invertemos a lista para que a mensagem mais recente seja o índice 0
+    final reversedMessages = _messages.reversed.toList();
+
+    return ListView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+      itemCount: reversedMessages.length,
+      reverse: true, // 👈 CRÍTICO: Faz a lista começar de baixo para cima
+      itemBuilder: (context, index) {
+        final message = reversedMessages[index];
+        return _buildWhatsAppBubble(message);
+      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final sortedMessages = List<Message>.from(_messages)
-      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
-
     return Scaffold(
       appBar: AppBar(
         title: Column(
@@ -704,16 +689,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           ],
                         ),
                       )
-                    : ListView.builder(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.only(bottom: 8),
-                        itemCount: sortedMessages.length,
-                        reverse: false,
-                        itemBuilder: (context, index) {
-                          final message = sortedMessages[index];
-                          return _buildMessageBubble(message);
-                        },
-                      ),
+                    : _buildChatList(),
           ),
           Container(
             padding: const EdgeInsets.all(8),
