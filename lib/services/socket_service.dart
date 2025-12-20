@@ -7,6 +7,7 @@ import 'package:cliente/services/crypto_service.dart';
 import 'package:cliente/services/messagecrypo_servece.dart';
 import 'package:flutter/widgets.dart';
 import 'package:cliente/services/local_storage_service.dart';
+import 'package:uuid/uuid.dart';
 
 class SocketService {
   Socket? _socket;

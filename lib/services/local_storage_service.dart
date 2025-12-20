@@ -79,8 +79,7 @@ class LocalStorageService {
 
       debugPrint('💾 Mensagem salva localmente: ${message['id']}');
     } else {
-      debugPrint(
-          'Mensagem já existe: ${message['id']} - ignorando duplicata');
+      debugPrint('Mensagem já existe: ${message['id']} - ignorando duplicata');
     }
   }
 

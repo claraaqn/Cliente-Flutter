@@ -143,6 +143,9 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final socketService = authProvider.socketService;
     final userId = authProvider.userId;
 
+    final userId = authProvider.userId;
+    debugPrint("ID de quem tá enviando o pedido de amizade $userId");
+
     setState(() {
       _isLoading = true;
       _errorMessage = '';
