@@ -1,16 +1,20 @@
 class Friend {
+  final int idfriendship;
   final int id;
   final String username;
   final DateTime createdAt;
   final bool isOnline;
   final DateTime? lastSeen;
+  final String? publicKey;
 
   Friend({
+    required this.idfriendship,
     required this.id,
     required this.username,
     required this.createdAt,
     required this.isOnline,
     this.lastSeen,
+    this.publicKey,
   });
 
   factory Friend.fromJson(Map<String, dynamic> json) {
@@ -21,12 +25,14 @@ class Friend {
         (isOnlineRaw == 'true');
 
     return Friend(
-      id: json['id'],
+      idfriendship: json["id_friendship"],
+      id: json['user_id'],
       username: json['username'],
       createdAt: DateTime.parse(json['created_at']),
       isOnline: isOnline,
       lastSeen:
           json['last_seen'] != null ? DateTime.parse(json['last_seen']) : null,
+      publicKey: json['public_key'],
     );
   }
 }

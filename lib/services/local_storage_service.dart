@@ -197,6 +197,20 @@ class LocalStorageService {
     }
   }
 
+  Future<void> initForUser(int userId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt("userID", userId);
+    } catch (e) {
+      debugPrint("❌ [LocalStorage] Erro ao inicializar banco: $e");
+    }
+  }
+
+  Future<int?> getuserdd(int userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(userId as String);
+  }
+
   Future<Map<String, String>?> getUserCredentials() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -281,17 +295,17 @@ class LocalStorageService {
     await prefs.remove("shared_key_$reciverId");
   }
 
-    Future<void> saveMyPrivateKeyDHE(int myID, String privateKey) async {
+  Future<void> saveMyPrivateKeyDHE(int myID, String privateKey) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString("my_priv_DHE$myID", privateKey);
   }
 
-    Future<String?> getMyPrivateKeyDH(int myID) async {
+  Future<String?> getMyPrivateKeyDH(int myID) async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString("my_priv_DHE$myID");
   }
 
-    Future<void> saveMyPublicteKeyDHE(int myID, String publicKey) async {
+  Future<void> saveMyPublicteKeyDHE(int myID, String publicKey) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString("my_pub_DHE$myID", publicKey);
   }
@@ -301,7 +315,27 @@ class LocalStorageService {
     return prefs.getString("my_pub_DHE$myID");
   }
 
-// autenticação 
+  // Salva as chaves finais da sessão (AES + HMAC)
+  Future<void> saveFriendSessionKeys(
+      int idFriendship, String encKey, String hmacKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString("session_enc_$idFriendship", encKey);
+    await prefs.setString("session_hmac_$idFriendship", hmacKey);
+  }
+
+  // Recupera as chaves salvas
+  Future<Map<String, String>?> getFriendSessionKeys(int idFriendship) async {
+    final prefs = await SharedPreferences.getInstance();
+    final enc = prefs.getString("session_enc_$idFriendship");
+    final hmac = prefs.getString("session_hmac_$idFriendship");
+
+    if (enc != null && hmac != null) {
+      return {'encryption': enc, 'hmac': hmac};
+    }
+    return null;
+  }
+
+// autenticação
   Future<void> saveMyPrivateKey(int myID, String privateKey) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString("my_priv_ed25519$myID", privateKey);
@@ -330,5 +364,17 @@ class LocalStorageService {
   Future<String?> getFriendPublicKey(int friendId) async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString("friend_pub_ed25519$friendId");
+  }
+
+  static const String _userIdKey = 'user_id';
+
+  Future<void> saveUserId(int id) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_userIdKey, id);
+  }
+
+  Future<int?> getUserId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_userIdKey);
   }
 }

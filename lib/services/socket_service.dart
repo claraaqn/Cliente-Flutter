@@ -22,6 +22,7 @@ class SocketService {
   final CryptoService _crypto = CryptoService();
   final MessageCryptoService _messageCrypto = MessageCryptoService();
   bool _isEncryptionEnabled = false;
+  bool _isEncryptionFriendEnabled = false;
 
   // Stream de mensagens broadcast para listeners
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
@@ -42,6 +43,8 @@ class SocketService {
 
   void setAuthenticatedUser({required int userId, required String username}) {
     _authenticatedUserId = userId;
+    _userId = userId.toString(); // Sincroniza a String usada no sendMessage
+    _username = username;
     debugPrint('SocketService - Usuário autenticado: $username (ID: $userId)');
   }
 
@@ -249,7 +252,8 @@ class SocketService {
   }
 
   //? funciona - amizade
-  Future<Map<String, dynamic>> sendFriendRequest(String friendUsername, int userId) async {
+  Future<Map<String, dynamic>> sendFriendRequest(
+      String friendUsername, int userId) async {
     final keys = await _crypto.generateDHEKeyPair();
     final pubA = keys["publicKey"];
     final priA = keys["privateKey"];
@@ -289,13 +293,12 @@ class SocketService {
   }
 
   Future<Map<String, dynamic>> handshakeFriends(
-      int senderId, String receiverPub, int reciverId) async {
+      int senderId, String receiverPub, int reciverId, int idFriendship) async {
     debugPrint('Começando HandShake');
 
     _localStorage.saveFriendPublicKey(reciverId, receiverPub);
 
-    final privA =
-        await _localStorage.getMyPrivateKeyDH(senderId);
+    final privA = await _localStorage.getMyPrivateKeyDH(senderId);
 
     final sessionSalt = _crypto.generateSalt();
     final sessionId = const Uuid().v4();
@@ -314,29 +317,35 @@ class SocketService {
     final encryptionKey = sessionKeys['encryption'];
     final hmacKey = sessionKeys['hmac'];
 
-    String convertKey(dynamic key) {
-      if (key is List<int>) {
-        return base64Encode(Uint8List.fromList(key));
-      } else if (key is String) {
-        return key;
-      } else {
-        return key.toString();
-      }
-    }
+    final encBase64 = base64Encode(sessionKeys['encryption']!);
+    final hmacBase64 = base64Encode(sessionKeys['hmac']!);
+
+    debugPrint('💾 Salvando as chaves para o id de amizade: $idFriendship');
+    await _localStorage.saveFriendSessionKeys(
+        idFriendship, encBase64, hmacBase64);
+
+    final check = await _localStorage.getFriendSessionKeys(idFriendship);
+    debugPrint(
+        '🔍 Verificação pós-salvamento: ${check != null ? "Sucesso" : "Falha"}');
+
+    _crypto.setSessionKeysFriends(
+      encryptionKey: sessionKeys['encryption']!,
+      hmacKey: sessionKeys['hmac']!,
+    );
+    _isEncryptionFriendEnabled = true;
 
     debugPrint('Handshake realizado - Chaves de sessão geradas');
 
     return _sendAndWaitForResponse({
       "action": "handshake_complete",
+      "id_friendship": idFriendship,
       "reciverId": reciverId,
       "session_id": sessionId,
       "salt": sessionSalt,
-      "encryption_key": convertKey(encryptionKey),
-      "hmac_key": convertKey(hmacKey),
+      "encryption_key": encBase64,
+      "hmac_key": hmacBase64,
       "shared_secret": base64Encode(await sharedSecret),
-    }, 
-    "handshake_finalizado"
-    );
+    }, "handshake_finalizado");
   }
 
   Future<Map<String, dynamic>> getFriendRequests() async {
@@ -359,7 +368,8 @@ class SocketService {
 
   //! Envia mensagem
   Future<Map<String, dynamic>> sendMessage(
-      String receiverUsername, String content) async {
+      String receiverUsername, String content, int idFriendship) async {
+    // 1. Validações Básicas
     if (!_isAuthenticated()) {
       return {'success': false, 'message': 'Usuário não autenticado'};
     }
@@ -370,7 +380,8 @@ class SocketService {
 
     debugPrint('💬 Enviando mensagem para $receiverUsername: $content');
 
-    final localId = 'local_${DateTime.now().millisecondsSinceEpoch}_${_userId}';
+    final localId = 'local_${DateTime.now().millisecondsSinceEpoch}_$_userId';
+
     final messageData = {
       'sender_id': _userId,
       'sender_username': _username,
@@ -380,55 +391,77 @@ class SocketService {
       'local_id': localId,
     };
 
-    await _localStorage.saveMessageLocally(messageData);
-    debugPrint('Mensagem salva localmente: $localId');
+    try {
+      await _localStorage.saveMessageLocally(messageData);
+      debugPrint('Mensagem salva localmente: $localId');
+    } catch (e) {
+      debugPrint('⚠️ Erro ao salvar localmente (DB não iniciado?): $e');
+    }
 
     try {
-      // Prepara a mensagem para envio (criptografada ou não)
+      Map<String, dynamic> plainMessage = {
+        'action': 'send_message',
+        'receiver_username': receiverUsername,
+        'content': content,
+        'sender_id': _userId,
+        'sender_username': _username,
+        'timestamp': DateTime.now().toIso8601String(),
+        'local_id': localId,
+      };
+
+      // 4. CAMADA 1: Criptografia de Amigo (Ponta-a-Ponta)
+      bool friendReady = await ensureSessionReady(idFriendship);
+
+      if (friendReady) {
+        debugPrint("🔒 Criptografando conteúdo para o amigo...");
+        try {
+          // Criptografa o conteúdo original
+          final encryptedContentMap =
+              await _crypto.encryptMessageFriend(content);
+
+          // ✅ CRÍTICO: Serializa o mapa para String JSON.
+          // O servidor verá apenas uma string, mas o destinatário saberá abrir.
+          plainMessage['content'] = json.encode(encryptedContentMap);
+        } catch (e) {
+          debugPrint("❌ Erro ao cifrar conteúdo de amigo: $e");
+          // Fallback: Se falhar a cifra de amigo, decide se envia em texto claro ou cancela
+        }
+      } else {
+        debugPrint(
+            "⚠️ Chaves de amigo não encontradas. Enviando conteúdo legível para o servidor.");
+      }
+
+      // 5. CAMADA 2: Criptografia de Servidor (Túnel)
       final Map<String, dynamic> messageToSend;
 
       if (_isEncryptionEnabled) {
-        // Criptografa a mensagem
-        final plainMessage = {
-          'action': 'send_message',
-          'receiver_username': receiverUsername,
-          'content': content,
-          'sender_id': _userId,
-          'sender_username': _username,
-          'timestamp': DateTime.now().toIso8601String(),
-          'local_id': localId,
-        };
-
-        final encryptedMessage =
+        // Chaves do servidor (Server Handshake)
+        final encryptedPacket =
             await _crypto.encryptMessage(json.encode(plainMessage));
         messageToSend = {
           'action': 'encrypted_message',
-          ...encryptedMessage,
+          ...encryptedPacket,
         };
       } else {
-        // Mensagem não criptografada (antes do handshake)
-        messageToSend = {
-          'action': 'send_message',
-          'receiver_username': receiverUsername,
-          'content': content,
-          'sender_id': _userId,
-          'sender_username': _username,
-          'timestamp': DateTime.now().toIso8601String(),
-          'local_id': localId,
-        };
+        // Fallback: Se não houver nem criptografia de servidor (raro)
+        messageToSend = plainMessage;
       }
 
+      // 6. Envio
       final response = await _sendAndWaitForResponse(
         messageToSend,
         'send_message_response',
       );
 
+      // 7. Processa Resposta
       if (response['success'] == true) {
         final messageId = response['data']['message_id'];
         final isOffline = response['data']['is_offline'] == true;
 
         if (messageId != null) {
-          await _localStorage.markMessageAsSent(localId, messageId);
+          try {
+            await _localStorage.markMessageAsSent(localId, messageId);
+          } catch (_) {}
         }
 
         debugPrint(isOffline
@@ -438,13 +471,42 @@ class SocketService {
 
       return response;
     } catch (e) {
-      debugPrint('❌ Erro ao enviar mensagem: $e');
+      debugPrint('❌ Erro crítico no envio: $e');
       return {
         'success': false,
-        'message': 'Mensagem salva localmente, erro no envio',
+        'message': 'Erro no envio: $e',
         'local_id': localId,
       };
     }
+  }
+
+  Future<bool> ensureSessionReady(int idFriendship) async {
+    // 1. Verifica se já está na RAM (Rápido)
+    if (_crypto.isFriendSessionReady) {
+      _isEncryptionFriendEnabled = true;
+      return true;
+    }
+
+    debugPrint("⚠️ Chaves não estão na RAM. Tentando restaurar do disco...");
+
+    // 2. Tenta restaurar do LocalStorage (Cache)
+    final keys = await _localStorage.getFriendSessionKeys(idFriendship);
+    if (keys != null) {
+      try {
+        _crypto.setSessionKeysFriends(
+          encryptionKey: base64Decode(keys['encryption']!),
+          hmacKey: base64Decode(keys['hmac']!),
+        );
+        _isEncryptionFriendEnabled = true;
+        debugPrint("✅ Chaves restauradas com sucesso!");
+        return true;
+      } catch (e) {
+        debugPrint("❌ Erro ao decodificar chaves do cache: $e");
+      }
+    }
+
+    debugPrint("❌ Nenhuma chave encontrada no cache. Handshake necessário.");
+    return false;
   }
 
   Future<void> checkPendingMessages() async {
@@ -466,19 +528,22 @@ class SocketService {
             '📨 ${pendingMessages.length} mensagens pendentes recebidas');
 
         for (final message in pendingMessages) {
-          debugPrint('📨 Processando mensagem pendente: ${message['content']}');
+          // ✅ Aplica a descriptografia P2P em cada mensagem da lista
+          final decryptedData = await _tryDecryptFriendLayer(message);
 
           final newMessage = {
             'action': 'new_message',
-            'id': message['id'],
-            'sender_id': message['sender_id'],
-            'receiver_id': message['receiver_id'],
-            'content': message['content'],
-            'timestamp': message['timestamp'],
+            'id': decryptedData['id'],
+            'sender_id': decryptedData['sender_id'],
+            // receiver_id as vezes falta no JSON do servidor, garantimos aqui:
+            'receiver_id': _authenticatedUserId,
+            'content': decryptedData['content'],
+            'timestamp': decryptedData['timestamp'],
             'is_delivered': true,
           };
 
           _messageController.add(newMessage);
+          // ... (resto do seu código de confirmação)
 
           try {
             await _sendAndWaitForResponse(
@@ -620,22 +685,76 @@ class SocketService {
 
   Future<void> _processRealTimeMessage(Map<String, dynamic> message) async {
     try {
-      // Verifica se é uma mensagem criptografada
+      Map<String, dynamic> processedMessage = message;
+
+      // 1. Camada do Servidor (Tira o envelope externo)
       if (_isEncryptionEnabled && _isEncryptedMessage(message)) {
-        final decryptedMessage = _decryptReceivedMessage(message);
-        _messageController.add(await decryptedMessage);
-      } else {
-        _messageController.add(message);
+        processedMessage = await _decryptReceivedMessage(message);
       }
+
+      // 2. Camada de Amigo (Abre o conteúdo P2P)
+      if (processedMessage['action'] == 'new_message') {
+        processedMessage = await _tryDecryptFriendLayer(processedMessage);
+      }
+
+      _messageController.add(processedMessage);
     } catch (e) {
       debugPrint('Erro ao processar mensagem: $e');
-      // Envia mensagem de erro
       _messageController.add({
         'action': 'error',
-        'message': 'Erro ao processar mensagem: $e',
+        'message': 'Erro ao processar: $e',
         'success': false,
       });
     }
+  }
+
+  Future<Map<String, dynamic>> _tryDecryptFriendLayer(
+      Map<String, dynamic> message) async {
+    final dynamic rawContent = message['content'];
+
+    // Se o conteúdo não for uma String ou não parecer um JSON, retorna original
+    if (rawContent is! String || !rawContent.trim().startsWith('{'))
+      return message;
+
+    try {
+      final Map<String, dynamic> contentMap = json.decode(rawContent);
+
+      // Verifica se possui a estrutura de criptografia {ciphertext, hmac}
+      if (contentMap.containsKey('ciphertext') &&
+          contentMap.containsKey('hmac')) {
+        // O remetente da mensagem é quem possui a chave que precisamos
+        final senderIdValue = message['sender_id'];
+        if (senderIdValue == null) return message;
+
+        final int senderId = int.parse(senderIdValue.toString());
+
+        // ✅ GARANTIA: Carrega chaves do cache/RAM antes de descriptografar
+        bool ready = await ensureSessionReady(senderId);
+
+        if (ready) {
+          final Map<String, String> cryptoPayload = {
+            'ciphertext': contentMap['ciphertext'].toString(),
+            'hmac': contentMap['hmac'].toString(),
+          };
+
+          // Descriptografa o conteúdo original (Texto Claro)
+          final String decryptedText =
+              await _crypto.decryptMessageFriend(cryptoPayload);
+
+          // Substitui o JSON feio pelo texto legível
+          message['content'] = decryptedText;
+          debugPrint("🔓 Conteúdo P2P descriptografado com sucesso!");
+        } else {
+          message['content'] =
+              "🔒 Mensagem criptografada (Chaves indisponíveis)";
+        }
+      }
+    } catch (e) {
+      // Se falhar o parse, provavelmente era apenas um texto normal que começava com '{'
+      debugPrint("Aviso: Conteúdo não era um pacote P2P válido.");
+    }
+
+    return message;
   }
 
 //! criptografia

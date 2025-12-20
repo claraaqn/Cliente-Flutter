@@ -76,8 +76,36 @@ class _ContactsScreenState extends State<ContactsScreen> {
       } else if (action == "auth_complete") {
         debugPrint("AUTENTICAÇÃO MÚTUA CONCLUÍDA COM SUCESSO!");
         // Habilitar chat UI aqui
+      } else if (action == "chaves_para_b") {
+        _saveKeys(message);
       }
     });
+  }
+
+  Future<void> _saveKeys(Map<String, dynamic> data) async {
+    // Use a instância que já existe no seu serviço de preferência
+    final idFriendship = data["id_friendship"];
+    final encry = data["encryption_key"];
+    final hmac = data["hmac_key"];
+
+    final cryptoService = CryptoService();
+    final localstorage = LocalStorageService();
+
+    if (idFriendship != null && encry != null && hmac != null) {
+      debugPrint(
+          '💾 Salvando as chaves recebidas do servidor para amizade: $idFriendship');
+
+      // Certifique-se de que o idFriendship seja tratado como int
+      final int id = int.parse(idFriendship.toString());
+
+      await localstorage.saveFriendSessionKeys(id, encry, hmac);
+
+      // ✅ Importante: Notificar o CryptoService que as chaves chegaram!
+      cryptoService.setSessionKeysFriends(
+        encryptionKey: base64Decode(encry),
+        hmacKey: base64Decode(hmac),
+      );
+    }
   }
 
   //! ajietar o front dessa função
@@ -143,7 +171,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final socketService = authProvider.socketService;
     final userId = authProvider.userId;
 
-    final userId = authProvider.userId;
     debugPrint("ID de quem tá enviando o pedido de amizade $userId");
 
     setState(() {
@@ -508,20 +535,20 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   Future<void> _handleFriendRequestAccepted(
       Map<String, dynamic> message) async {
-
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final socketService = authProvider.socketService;
 
     final senderId = message["sender_id"];
     final receiverPub = message["receiver_public_key"];
     final receiverId = message["receiver_id"];
+    final idFriendship = message["id_friendship"];
 
     debugPrint("Id do sender $senderId");
     debugPrint("Chave do reciver $receiverPub");
     debugPrint("Id do request $receiverId");
 
-    final handshakeResponse = await
-        socketService.handshakeFriends(senderId, receiverPub, receiverId);
+    final handshakeResponse = await socketService.handshakeFriends(
+        senderId, receiverPub, receiverId, idFriendship);
 
     if (handshakeResponse['success'] == true) {
       debugPrint(
