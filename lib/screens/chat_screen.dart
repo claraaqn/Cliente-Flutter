@@ -140,23 +140,30 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _saveMessageLocally(Message message) async {
-    if (_localStorage == null) return; // Proteção extra
+    if (_localStorage == null) return;
 
     try {
-      final chatMessage = ChatMessage(
-        from: message.senderId.toString(),
-        content: message.content,
-        timestamp: message.timestamp,
-      );
+      // Criamos o mapa no formato que o seu LocalStorageService espera
+      final messageData = {
+        'id': message.id, // server_id
+        'sender_id': message.senderId,
+        'sender_username': message.isMine ? 'Eu' : widget.friend.username,
+        'receiver_username': message.isMine ? widget.friend.username : 'Eu',
+        'content': message.content,
+        'timestamp': message.timestamp.toIso8601String(),
+        'is_delivered': message.isDelivered,
+        'is_read': 0,
+      };
 
-      // Use o serviço em vez da instância estática direta se possível,
-      // ou garanta que o _localStorage.initForUser já rodou (o que fizemos acima)
-      await DatabaseHelper.instance
-          .insertMessage(chatMessage, widget.friend.username);
+      if (message.isMine) {
+        await _localStorage!.saveMessageLocally(messageData);
+      } else {
+        await _localStorage!.saveReceivedMessage(messageData);
+      }
 
-      debugPrint('💾 Mensagem salva localmente');
+      debugPrint('💾 Mensagem salva via LocalStorageService');
     } catch (e) {
-      debugPrint('❌ Erro ao salvar mensagem localmente: $e');
+      debugPrint('❌ Erro ao salvar mensagem no LocalStorage: $e');
     }
   }
 
@@ -356,15 +363,6 @@ class _ChatScreenState extends State<ChatScreen> {
         content: text,
         timestamp: now,
       );
-      try {
-        await DatabaseHelper.instance
-            .insertMessage(sentMessage, widget.friend.username);
-        debugPrint('💾 Mensagem salva localmente com sucesso.');
-      } catch (e) {
-        debugPrint(
-            '⚠️ AVISO: Falha ao salvar no banco local (O banco foi inicializado?): $e');
-        // Não damos return aqui, deixamos o código continuar para enviar a mensagem online
-      }
 
       if (mounted) {
         setState(() {
@@ -390,7 +388,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
       final socketService = authProvider.socketService;
       debugPrint("Id da amizade ${widget.friend.idfriendship}");
-      
+
       final response = await socketService.sendMessage(
           widget.friend.username, text, widget.friend.idfriendship);
 
@@ -411,6 +409,43 @@ class _ChatScreenState extends State<ChatScreen> {
         });
       }
     }
+  }
+
+  void _clearChatHistory() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Apagar Histórico?'),
+        content: Text(
+            'Deseja realmente apagar todas as mensagens com ${widget.friend.username}? Esta ação não pode ser desfeita.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+
+              // 1. Chama o serviço para apagar do banco SQL
+              await _localStorage!
+                  .deleteConversationHistory(widget.friend.username);
+
+              // 2. Limpa a lista na memória para atualizar a UI imediatamente
+              setState(() {
+                _messages
+                    .clear(); // Substitua pelo nome da sua lista de mensagens
+              });
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Histórico apagado com sucesso.')),
+              );
+            },
+            child: const Text('Apagar', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
   }
 
   //! digitação
@@ -639,10 +674,9 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.info_outline),
-            onPressed: () {
-              // TODO: Mostrar informações do contato
-            },
+            icon: const Icon(
+                Icons.delete_sweep_outlined), // Ícone sugerido para limpeza
+            onPressed: _clearChatHistory,
           ),
         ],
       ),

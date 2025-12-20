@@ -1,5 +1,3 @@
-// lib/database_helper.dart
-
 import 'package:flutter/material.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
@@ -27,7 +25,8 @@ class DatabaseHelper {
     final dbName = 'Chat_${username}.db';
     String path = join(await getDatabasesPath(), dbName);
     _database = await openDatabase(path, version: 1, onCreate: _onCreate);
-    debugPrint("Banco de dados inicializado para o usuário: $username em $path");
+    debugPrint(
+        "Banco de dados inicializado para o usuário: $username em $path");
   }
 
   Future<Database> get database async {

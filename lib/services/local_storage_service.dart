@@ -153,6 +153,25 @@ class LocalStorageService {
     return null;
   }
 
+// No seu LocalStorageService
+  Future<int> deleteConversationHistory(String otherUsername) async {
+    try {
+      final db = await database;
+      // Remove todas as mensagens onde o usuário atual conversou com o 'otherUsername'
+      int count = await db.delete(
+        'messages',
+        where: 'receiver_username = ? OR sender_username = ?',
+        whereArgs: [otherUsername, otherUsername],
+      );
+      debugPrint(
+          '🗑️ Histórico com $otherUsername apagado: $count mensagens removidas.');
+      return count;
+    } catch (e) {
+      debugPrint('❌ Erro ao apagar histórico: $e');
+      return 0;
+    }
+  }
+
   Future<void> savePrivateKey(String privateKey) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -201,6 +220,8 @@ class LocalStorageService {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt("userID", userId);
+
+      await database;
     } catch (e) {
       debugPrint("❌ [LocalStorage] Erro ao inicializar banco: $e");
     }

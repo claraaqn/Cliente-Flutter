@@ -25,6 +25,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   bool _isAuthenticating = false;
 
+  final _localstorage = LocalStorageService();
+
   @override
   void initState() {
     super.initState();
@@ -88,6 +90,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final encry = data["encryption_key"];
     final hmac = data["hmac_key"];
 
+    debugPrint("$idFriendship");
+    debugPrint("$encry");
+    debugPrint("$hmac");
+
     final cryptoService = CryptoService();
     final localstorage = LocalStorageService();
 
@@ -100,7 +106,14 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
       await localstorage.saveFriendSessionKeys(id, encry, hmac);
 
-      // ✅ Importante: Notificar o CryptoService que as chaves chegaram!
+      final keys = await localstorage.getFriendSessionKeys(idFriendship);
+
+      final aes = keys?["encryption"];
+      final hmcap = keys?["hmac"];
+
+      debugPrint("$aes");
+      debugPrint("$hmcap");
+
       cryptoService.setSessionKeysFriends(
         encryptionKey: base64Decode(encry),
         hmacKey: base64Decode(hmac),
@@ -275,7 +288,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final socketService = authProvider.socketService;
     final cryptoService = CryptoService();
-    final localstorage = LocalStorageService();
 
     final userId = authProvider.userId;
 
@@ -284,8 +296,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final pubKey = keys["publicKey"];
     final privKey = keys["privateKey"];
 
-    localstorage.saveMyPrivateKey(userId!, privKey!);
-    localstorage.saveMyPublicteKey(userId, pubKey!);
+    _localstorage.saveMyPrivateKey(userId!, privKey!);
+    _localstorage.saveMyPublicteKey(userId, pubKey!);
 
     debugPrint("Iniciando Autenticação Mútua...");
 
@@ -333,7 +345,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final socketService = authProvider.socketService;
     final cryptoService = CryptoService();
-    final localstorage = LocalStorageService();
     debugPrint("Recebi desafio de autenticação");
 
     final senderId = message['sender_id']; // Quem mandou (A)
@@ -346,7 +357,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final senderPubKey = message['senderPubKey'];
     if (senderPubKey != null) {
       debugPrint("Salvando chave pública temporária de A");
-      await localstorage.saveFriendPublicKey(senderId, senderPubKey);
+      await _localstorage.saveFriendPublicKey(senderId, senderPubKey);
     } else {
       debugPrint(
           "AVISO: Cliente A não enviou chave pública. A validação final falhará.");
@@ -356,8 +367,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final pubKey = keys["publicKey"];
     final privKey = keys["privateKey"];
 
-    localstorage.saveMyPrivateKey(userId!, privKey!);
-    localstorage.saveMyPublicteKey(userId, pubKey!);
+    _localstorage.saveMyPrivateKey(userId!, privKey!);
+    _localstorage.saveMyPublicteKey(userId, pubKey!);
 
     // 2. Assinar o nonce recebido
     final signature =
@@ -384,7 +395,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
   Future<void> _handleAuthResponseAndChallenge(
       Map<String, dynamic> message) async {
     debugPrint("Verificando resposta do desafio...");
-    final localstorage = LocalStorageService();
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final socketService = authProvider.socketService;
     final cryptoService = CryptoService();
@@ -412,7 +422,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
     // 2. Buscar chave pública de IDENTIDADE do amigo
     final reciverPubKey = message["reciverPubKey"];
-    localstorage.saveFriendPublicKey(reciverId, reciverPubKey);
+    _localstorage.saveFriendPublicKey(reciverId, reciverPubKey);
 
     // 3. Verificar assinatura
     final isValid = await cryptoService.verifySignature(
@@ -429,7 +439,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
         "Amigo autenticado com sucesso! Agora provando minha identidade...");
 
     // 4. Assinar o desafio de B (NonceB)
-    final myPrivKey = await localstorage.getMyPrivateKey(senderId!);
+    final myPrivKey = await _localstorage.getMyPrivateKey(senderId!);
     if (myPrivKey == null) {
       debugPrint("ERRO: Minha chave privada não encontrada!");
       return;
@@ -454,7 +464,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   // Passo 4: B verifica a assinatura de A
   Future<void> _handleFinalVerification(Map<String, dynamic> message) async {
-    final localstorage = LocalStorageService();
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final socketService = authProvider.socketService;
     final cryptoService = CryptoService();
@@ -468,7 +477,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
       return;
     }
 
-    final friendPubKey = await localstorage.getFriendPublicKey(senderId);
+    final friendPubKey = await _localstorage.getFriendPublicKey(senderId);
 
     if (friendPubKey == null) {
       debugPrint("ERRO: Não tenho a chave pública do amigo $senderId salva.");
