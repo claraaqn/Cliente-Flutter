@@ -3,10 +3,12 @@ import 'dart:typed_data';
 import 'package:cliente/services/crypto_service.dart';
 import 'package:cliente/services/socket_service.dart';
 import 'package:flutter/widgets.dart';
+import 'package:cliente/services/session_manager.dart';
 
 class HandshakeService {
   final SocketService _socketService;
   final CryptoService _cryptoService;
+  final SessionManager _sessionManager = SessionManager();
 
   HandshakeService(this._socketService, this._cryptoService);
 
@@ -15,7 +17,9 @@ class HandshakeService {
   String? _dhePublicKey;
   String? _sessionSalt;
 
-  Future<bool> initiateHandshake() async {
+  SessionManager get sessionManager => _sessionManager;
+
+  Future<bool> initiateHandshake({bool isRenegotiation = false}) async {
     try {
       // 1. Cliente gera par DHE efêmero
       final dheKeyPair = await _cryptoService.generateDHEKeyPair();
@@ -29,7 +33,9 @@ class HandshakeService {
       final response = await _socketService.sendHandshakeInit(
         dhePublicKey: _dhePublicKey!,
         salt: _sessionSalt!,
+        isRenegotiation: isRenegotiation,
       );
+
       if (!response['success']) {
         return false;
       }
@@ -61,6 +67,8 @@ class HandshakeService {
         encryptionKey: sessionKeys!['encryption']!,
         hmacKey: sessionKeys!['hmac']!,
       );
+
+      _sessionManager.startSession();
 
       debugPrint('Handshake realizado - Chaves de sessão geradas');
       return true;
