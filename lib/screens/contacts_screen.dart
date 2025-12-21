@@ -39,7 +39,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
   void _resetAuthState() {
     setState(() {
       _isAuthenticating = false;
-      _sentNonce = null; // Limpa o nonce antigo
+      _sentNonce = null;
     });
   }
 
@@ -47,8 +47,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final socketService = authProvider.socketService;
 
-    // Escuta por mensagens do servidor
-    socketService.messageStream.listen((message) {
+    socketService.messageStream.listen((message) async {
       final action = message['action'];
 
       if (action == 'friend_request') {
@@ -65,22 +64,26 @@ class _ContactsScreenState extends State<ContactsScreen> {
       } else if (action == "friend_request_accepted") {
         _handleFriendRequestAccepted(message);
       } else if (action == "handshake_finalizado") {
-        // Passo 1: O Handshake de chaves acabou, A começa a autenticação
         _startMutualAuth(message);
       } else if (action == "auth_challenge") {
-        // Passo 2: B recebe o desafio de A
         _handleAuthChallenge(message);
       } else if (action == "auth_response_and_challenge") {
-        // Passo 3: A recebe a assinatura de B e o desafio de B
         _handleAuthResponseAndChallenge(message);
       } else if (action == "auth_final_verification") {
-        // Passo 4: B verifica a assinatura de A
         _handleFinalVerification(message);
       } else if (action == "auth_complete") {
         debugPrint("AUTENTICAÇÃO MÚTUA CONCLUÍDA COM SUCESSO!");
-        // Habilitar chat UI aqui
       } else if (action == "chaves_para_b") {
         _saveKeys(message);
+      } else if (action == "force_logout") {
+        await _localstorage.clearUserCredentials();
+        socketService.disconnect();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          Navigator.of(context).pushNamedAndRemoveUntil(
+            '/login',
+            (Route<dynamic> route) => false,
+          );
+        });
       }
     });
   }
@@ -94,6 +97,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
     if (idFriendship != null && encry != null && hmac != null) {
       await _localstorage.saveFriendSessionKeys(idFriendship, encry, hmac);
       cryptoService.setSessionKeysFriends(
+        friendshipId: idFriendship,
         encryptionKey: base64Decode(encry),
         hmacKey: base64Decode(hmac),
       );
@@ -205,9 +209,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final socketService = authProvider.socketService;
     final userId = authProvider.userId;
 
-    debugPrint("Id de quem enviou o pedido de amizade $senderId");
-    debugPrint("Id de quem recebeu o pedido de amizade $userId");
-
     try {
       final response =
           await socketService.respondFriendRequest('accepted', userId);
@@ -258,10 +259,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
     }
   }
 
-  // Variável para guardar o nonce que enviamos para validar a resposta depois
   String? _sentNonce;
 
-  // Passo 1: A inicia
   Future<void> _startMutualAuth(Map<String, dynamic> data) async {
     if (_isAuthenticating) {
       return;
@@ -274,7 +273,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
     final userId = authProvider.userId;
 
-    // cirando as chaves para assinatira:
     final keys = await cryptoService.generateKeyPair();
     final pubKey = keys["publicKey"];
     final privKey = keys["privateKey"];
@@ -345,7 +343,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
       "action": "auth_response_and_challenge",
       "target_id": senderId,
       "original_nonce": nonceReceived,
-      "signature": signature, // Prova que sou B
+      "signature": signature,
       "new_nonce": myNonce,
       "reciverId": userId,
       "reciverPubKey": pubKey,
@@ -445,8 +443,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
   }
 
   void _onAuthSuccess() {
-    // Atualiza estado do Provider para liberar envio de mensagens
-    // Provider.of<ChatProvider>(context, listen:false).setAuthenticated(true);
+    // TODO: front só atualizar quando termina turo
   }
 
   void _handleFriendRequestResponse(Map<String, dynamic> response) {
@@ -710,7 +707,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
             icon: const Icon(Icons.logout),
             onPressed: () {
               authProvider.logout();
-              Navigator.pop(context);
+              Navigator.of(context).pushNamedAndRemoveUntil(
+                '/login',
+                (Route<dynamic> route) => false,
+              );
             },
           ),
         ],

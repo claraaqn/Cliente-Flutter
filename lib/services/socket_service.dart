@@ -25,7 +25,8 @@ class SocketService {
   bool _isEncryptionEnabled = false;
 
   // Stream de mensagens broadcast para listeners
-  final _messageController = StreamController<Map<String, dynamic>>.broadcast();
+  StreamController<Map<String, dynamic>> _messageController =
+      StreamController<Map<String, dynamic>>.broadcast();
 
   final _messageBuffer = StringBuffer();
 
@@ -76,12 +77,13 @@ class SocketService {
 
   //? handles
   Future<bool> connect() async {
-    // Já conectado → nada a fazer
     if (_isConnected) return true;
 
-    // Já existe uma tentativa em andamento → espere ela terminar
+    if (_messageController.isClosed) {
+      _messageController = StreamController<Map<String, dynamic>>.broadcast();
+    }
     if (_isConnecting) {
-      debugPrint("⏳ Conexão já em andamento...");
+      debugPrint("!!Conexão já em andamento...");
       while (_isConnecting) {
         await Future.delayed(const Duration(milliseconds: 50));
       }
@@ -236,6 +238,19 @@ class SocketService {
     return response;
   }
 
+  Future<Map<String, dynamic>> loginAsNewDevice({
+    required String username,
+    required String password,
+    required String newPublicKey,
+  }) async {
+    return await _sendAndWaitForResponse({
+      'action': 'login_new_device',
+      'username': username,
+      'password': password,
+      'new_public_key': newPublicKey,
+    }, 'login_new_device_response');
+  }
+
   Future<Map<String, dynamic>> sendHandshakeInit({
     required String dhePublicKey,
     required String salt,
@@ -339,6 +354,7 @@ class SocketService {
         '🔍 Verificação pós-salvamento: ${check != null ? "Sucesso" : "Falha"}');
 
     _crypto.setSessionKeysFriends(
+      friendshipId: idFriendship,
       encryptionKey: sessionKeys['encryption']!,
       hmacKey: sessionKeys['hmac']!,
     );
@@ -455,7 +471,7 @@ class SocketService {
         debugPrint("Criptografando conteúdo para o amigo...");
         try {
           final encryptedContentMap =
-              await _crypto.encryptMessageFriend(content);
+              await _crypto.encryptMessageFriend(content, idFriendship);
 
           plainMessage['content'] = json.encode(encryptedContentMap);
         } catch (e) {
@@ -518,15 +534,13 @@ class SocketService {
 
   Future<bool> ensureSessionReady(int idFriendship) async {
     // 1. Verifica se já está na RAM (Rápido)
-    if (_crypto.isFriendSessionReady) {
-      return true;
-    }
 
     // 2. Tenta restaurar do LocalStorage (Cache)
     final keys = await _localStorage.getFriendSessionKeys(idFriendship);
     if (keys != null) {
       try {
         _crypto.setSessionKeysFriends(
+          friendshipId: idFriendship,
           encryptionKey: base64Decode(keys['encryption']!),
           hmacKey: base64Decode(keys['hmac']!),
         );
@@ -714,7 +728,6 @@ class SocketService {
     try {
       Map<String, dynamic> processedMessage = message;
 
-      // 1. Camada do Servidor (Tira o envelope externo)
       if (_isEncryptionEnabled && _isEncryptedMessage(message)) {
         processedMessage = await _decryptReceivedMessage(message);
       }
@@ -763,7 +776,7 @@ class SocketService {
           };
 
           final String decryptedText =
-              await _crypto.decryptMessageFriend(cryptoPayload);
+              await _crypto.decryptMessageFriend(cryptoPayload, idFriendship);
           message['content'] = decryptedText;
         } else {
           message['content'] = "Mensagem criptografada (Chaves indisponíveis)";
@@ -926,11 +939,15 @@ class SocketService {
   bool get isEncryptionEnabled => _isEncryptionEnabled;
 
   void disconnect() {
-    _socket?.close();
+    debugPrint('Iniciando desconexão...');
     _isConnected = false;
+    _socket?.destroy();
+    _socket = null;
     disableEncryption();
     _crypto.clearSessionKeys();
-    _messageController.close();
-    debugPrint('🔌 Desconectado do servidor');
+    clearAuthentication();
+    if (!_messageController.isClosed) {
+      _messageController.add({'action': 'socket_disconnected'});
+    }
   }
 }

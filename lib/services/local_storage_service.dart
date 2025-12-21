@@ -76,7 +76,6 @@ class LocalStorageService {
         'is_sent_to_server': 1,
         'is_read': isRead,
       });
-
     } else {
       debugPrint('Mensagem já existe: ${message['id']} - ignorando duplicata');
     }
@@ -152,11 +151,9 @@ class LocalStorageService {
     return null;
   }
 
-// No seu LocalStorageService
   Future<int> deleteConversationHistory(String otherUsername) async {
     try {
       final db = await database;
-      // Remove todas as mensagens onde o usuário atual conversou com o 'otherUsername'
       int count = await db.delete(
         'messages',
         where: 'receiver_username = ? OR sender_username = ?',
@@ -173,12 +170,10 @@ class LocalStorageService {
 
   Future<int?> getFriendshipId(int friendId) async {
     final db = await database;
-    // Ajuste a query conforme a estrutura da sua tabela de amigos
-    // Exemplo supondo tabela 'friends' com colunas 'user_id' e 'id_friendship'
     final result = await db.query(
-      'friends', // Nome da sua tabela de amigos
+      'friends', 
       columns: ['id_friendship'],
-      where: 'user_id = ?', // Ou 'friend_id' dependendo do seu schema
+      where: 'user_id = ?',
       whereArgs: [friendId],
       limit: 1,
     );
@@ -240,7 +235,7 @@ class LocalStorageService {
 
       await database;
     } catch (e) {
-      debugPrint("❌ [LocalStorage] Erro ao inicializar banco: $e");
+      debugPrint("[LocalStorage] Erro ao inicializar banco: $e");
     }
   }
 
@@ -291,21 +286,18 @@ class LocalStorageService {
     }
   }
 
-  // salvar a chave privada do sender
   Future<void> saveFriendRequestKeySender(
       int reciverId, String privateKey) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString("friend_req_${reciverId}_privA", privateKey);
   }
 
-// salvar a chave privada do reciver
   Future<void> saveFriendRequestKeyReceiver(
       int reciverId, String privateKey) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString("friend_req_${reciverId}_privB", privateKey);
   }
 
-  // salvar chave compartilhada
   Future<void> saveSharedKey(int reciverId, String sharedKey) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString("shared_key_$reciverId", sharedKey);
@@ -353,7 +345,6 @@ class LocalStorageService {
     return prefs.getString("my_pub_DHE$myID");
   }
 
-  // Salva as chaves finais da sessão (AES + HMAC)
   Future<void> saveFriendSessionKeys(
       int idFriendship, String encKey, String hmacKey) async {
     final prefs = await SharedPreferences.getInstance();
@@ -361,7 +352,6 @@ class LocalStorageService {
     await prefs.setString("session_hmac_$idFriendship", hmacKey);
   }
 
-  // Recupera as chaves salvas
   Future<Map<String, String>?> getFriendSessionKeys(int idFriendship) async {
     final prefs = await SharedPreferences.getInstance();
     final enc = prefs.getString("session_enc_$idFriendship");
@@ -373,7 +363,6 @@ class LocalStorageService {
     return null;
   }
 
-// autenticação
   Future<void> saveMyPrivateKey(int myID, String privateKey) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString("my_priv_ed25519$myID", privateKey);
@@ -414,5 +403,20 @@ class LocalStorageService {
   Future<int?> getUserId() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getInt(_userIdKey);
+  }
+
+  Future<void> deleteFriendSessionKeys(int friendshipId) async {
+    final db = await database;
+    try {
+      await db.delete(
+        'friend_session_keys',
+        where: 'id_friendship = ?',
+        whereArgs: [friendshipId],
+      );
+      debugPrint(
+          "Chaves de sessão deletadas do DB para amizade: $friendshipId");
+    } catch (e) {
+      debugPrint("Erro ao deletar chaves de sessão: $e");
+    }
   }
 }

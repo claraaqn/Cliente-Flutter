@@ -14,9 +14,8 @@ class CryptoService {
   final _ed25519 = Ed25519();
 
   final MessageCryptoService _messageCrypto = MessageCryptoService();
-  final MessageCryptoService _messageCryptofriends = MessageCryptoService();
+  final Map<int, MessageCryptoService> _friendSessionKeys = {};
 
-  // Gera um par de chaves ECC principais (para registro/login)
   Future<Map<String, String>> generateKeyPair() async {
     try {
       final keyPair = await _ed25519.newKeyPair();
@@ -38,7 +37,6 @@ class CryptoService {
     try {
       final privateKeyBytes = base64Decode(privateKeyB64);
 
-      // Criar key pair a partir da seed usando Ed25519
       final keyPair = await _ed25519.newKeyPairFromSeed(privateKeyBytes);
       final publicKey = await keyPair.extractPublicKey();
 
@@ -52,7 +50,6 @@ class CryptoService {
     }
   }
 
-  // Gera par DHE efêmero com X25519  (32 bytes)
   Future<Map<String, String>> generateDHEKeyPair() async {
     final keyPar = await _x25519.newKeyPair();
 
@@ -65,7 +62,6 @@ class CryptoService {
     };
   }
 
-  // Calcula segredo compartilhado
   Future<Uint8List> computeSharedSecretBytes({
     required String ownPrivateBase64,
     required String peerPublicBase64,
@@ -94,7 +90,6 @@ class CryptoService {
     }
   }
 
-  // Adicione este helper para converter bytes para hex
   String bytesToHex(Uint8List bytes) {
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
@@ -105,7 +100,6 @@ class CryptoService {
     return base64Encode(Uint8List.fromList(bytes));
   }
 
-  // Deriva chaves de sessão usando HKDF-SHA256
   Future<Map<String, Uint8List>> deriveKeysFromSharedSecret({
     required Uint8List sharedSecret,
     required String saltBase64,
@@ -114,7 +108,6 @@ class CryptoService {
     try {
       final salt = base64Decode(saltBase64);
 
-      // Usar HKDF-SHA256
       final hkdf = Hkdf(hmac: Hmac(Sha256()), outputLength: 64);
 
       final keyMaterial = await hkdf.deriveKey(
@@ -138,17 +131,14 @@ class CryptoService {
     }
   }
 
-  // Criptografa uma mensagem para envio
   Future<Map<String, String>> encryptMessage(String plaintext) {
     return _messageCrypto.encryptMessage(plaintext);
   }
 
-  // Descriptografa uma mensagem recebida
   Future<String> decryptMessage(Map<String, String> encryptedMessage) {
     return _messageCrypto.decryptMessage(encryptedMessage);
   }
 
-  // Verifica se a criptografia de mensagens está pronta
   bool get isMessageCryptoReady => _messageCrypto.isReady;
 
   void setSessionKeys(
@@ -160,25 +150,47 @@ class CryptoService {
   }
 
   void setSessionKeysFriends(
-      {required Uint8List encryptionKey, required Uint8List hmacKey}) {
-    _messageCryptofriends.setSessionKeys(
-      encryptionKey: encryptionKey,
-      hmacKey: hmacKey,
-    );
+      {required int friendshipId, 
+      required Uint8List encryptionKey,
+      required Uint8List hmacKey}) {
+    final service = MessageCryptoService();
+    service.setSessionKeys(encryptionKey: encryptionKey, hmacKey: hmacKey);
+
+    _friendSessionKeys[friendshipId] = service;
   }
 
-  Future<Map<String, String>> encryptMessageFriend(String plaintext) {
-    return _messageCryptofriends.encryptMessage(plaintext);
+  Future<Map<String, String>> encryptMessageFriend(
+      String plaintext, int friendshipId) async {
+    final service = _friendSessionKeys[friendshipId];
+    if (service == null || !service.isReady) {
+      throw Exception(
+          "Sessão P2P não encontrada ou não iniciada para amizade $friendshipId");
+    }
+    return service.encryptMessage(plaintext);
   }
 
-  // Descriptografa uma mensagem recebida
-  Future<String> decryptMessageFriend(Map<String, String> encryptedMessage) {
-    return _messageCryptofriends.decryptMessage(encryptedMessage);
+  Future<String> decryptMessageFriend(
+      Map<String, String> encryptedMessage, int friendshipId) async {
+    final service = _friendSessionKeys[friendshipId];
+    if (service == null || !service.isReady) {
+      throw Exception(
+          "Chaves de sessão não carregadas para amizade $friendshipId");
+    }
+    return service.decryptMessage(encryptedMessage);
   }
 
-  bool get isFriendSessionReady => _messageCryptofriends.isReady;
+  bool isFriendSessionReady(int friendshipId) {
+    return _friendSessionKeys.containsKey(friendshipId) &&
+        _friendSessionKeys[friendshipId]!.isReady;
+  }
 
-  // Limpa as chaves de sessão
+  void clearFriendSession(int friendshipId) {
+    if (_friendSessionKeys.containsKey(friendshipId)) {
+      _friendSessionKeys.remove(friendshipId);
+      debugPrint("🧹 Cache de chaves limpo para amizade $friendshipId");
+    }
+  }
+
   void clearSessionKeys() {
     _messageCrypto.clearSessionKeys();
   }
@@ -187,10 +199,8 @@ class CryptoService {
     try {
       final privateKeyBytes = base64Decode(privateKeyB64);
 
-      // Criar key pair a partir da seed
       final keyPair = await _ed25519.newKeyPairFromSeed(privateKeyBytes);
 
-      // Assinar os dados
       final signature = await _ed25519.sign(
         data,
         keyPair: keyPair,
@@ -212,13 +222,11 @@ class CryptoService {
       final signatureBytes = base64Decode(signatureB64);
       final publicKeyBytes = base64Decode(publicKeyB64);
 
-      // Criar objeto Signature
       final signature = Signature(
         signatureBytes,
         publicKey: SimplePublicKey(publicKeyBytes, type: KeyPairType.ed25519),
       );
 
-      // Verificar assinatura
       final isVerified = await _ed25519.verify(
         data,
         signature: signature,
@@ -231,4 +239,5 @@ class CryptoService {
       return false;
     }
   }
+
 }

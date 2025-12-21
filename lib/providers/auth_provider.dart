@@ -17,7 +17,7 @@ class AuthProvider with ChangeNotifier {
     _handshakeService = HandshakeService(_socketService, _cryptoService);
 
     _socketService.setHandshakeService(_handshakeService);
-    
+
     log('AuthProvider inicializado com: ${_socketService.runtimeType}');
 
     _initializeAutoLogin();
@@ -59,7 +59,6 @@ class AuthProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      // Gera chaves ECC
       final keyPair = await _cryptoService.generateKeyPair();
       final publicKey = keyPair['publicKey']!;
       final privateKey = keyPair['privateKey']!;
@@ -112,12 +111,8 @@ class AuthProvider with ChangeNotifier {
       final handshakeSuccess = await _handshakeService.initiateHandshake();
       if (!handshakeSuccess) {
         _errorMessage = 'Falha no handshake';
-        return false;
-      }
-
-      final sessionKeys = _handshakeService.sessionKeys;
-      if (sessionKeys == null) {
-        _errorMessage = 'Chaves de sessão não disponíveis';
+        _isLoading = false;
+        notifyListeners();
         return false;
       }
 
@@ -126,40 +121,59 @@ class AuthProvider with ChangeNotifier {
         password: password,
       );
 
-      _isLoading = false;
-
       if (response['success'] == true) {
         final userData = response['data']?['user_data'] ?? response['data'];
-
         if (userData != null) {
-          _isLoggedIn = true;
           _userId = int.tryParse(userData['user_id']?.toString() ?? '');
-          _username = userData['username']?.toString() ?? username;
+          _username = userData['username'] ?? username;
 
           if (_userId != null) {
             await _localStorageService.initForUser(_userId!);
-            await _localStorageService.saveUserId(_userId!);
-          }
 
-          final privateKey = await _localStorageService.getPrivateKey();
-          if (privateKey != null) {
+            String? privateKey = await _localStorageService.getPrivateKey();
+
+            if (privateKey == null || privateKey.length < 30) {
+              debugPrint(
+                  "Novo dispositivo detectado ou chave perdida. Gerando novas chaves...");
+
+              final newKeyPair = await _cryptoService.generateKeyPair();
+              final newPublicKey = newKeyPair['publicKey']!;
+              final newPrivateKey = newKeyPair['privateKey']!;
+
+              final updateResponse = await _socketService.loginAsNewDevice(
+                username: username,
+                password: password,
+                newPublicKey: newPublicKey,
+              );
+
+              if (updateResponse['success'] == true) {
+                privateKey = newPrivateKey;
+                await _localStorageService.savePrivateKey(newPrivateKey);
+                debugPrint(
+                    "Novas chaves geradas e sincronizadas com o servidor.");
+              } else {
+                _errorMessage = "Falha ao registrar novo dispositivo.";
+                _isLoading = false;
+                notifyListeners();
+                return false;
+              }
+            }
+
             await _localStorageService.saveUserCredentials(
-                username, privateKey);
+                _username!, privateKey);
+            _isLoggedIn = true;
           }
 
-          _errorMessage = '';
+          _isLoading = false;
           notifyListeners();
           return true;
-        } else {
-          _errorMessage = 'Dados do usuário não encontrados';
-          notifyListeners();
-          return false;
         }
-      } else {
-        _errorMessage = response['message'] ?? 'Erro no login';
-        notifyListeners();
-        return false;
       }
+
+      _errorMessage = response['message'] ?? 'Erro no login';
+      _isLoading = false;
+      notifyListeners();
+      return false;
     } catch (e) {
       _isLoading = false;
       _errorMessage = 'Erro de conexão: $e';
@@ -170,22 +184,20 @@ class AuthProvider with ChangeNotifier {
 
   Future<void> _initializeAutoLogin() async {
     try {
-      final hasCredentials = await _localStorageService.hasCredentials();
+      final credentials = await _localStorageService.getUserCredentials();
+      final privateKey = await _localStorageService.getPrivateKey();
 
-      if (hasCredentials) {
-        final credentials = await _localStorageService.getUserCredentials();
-        if (credentials != null) {
-          final username = credentials['username']!;
-          debugPrint('Usuário das credenciais: $username');
-          await _tryAutoLogin();
-        }
+      if (credentials != null && privateKey != null && privateKey.length > 30) {
+        final username = credentials['username']!;
+        debugPrint('Tentando autologin para: $username');
+        await _tryAutoLogin();
       } else {
-        debugPrint('Nenhuma credencial salva para autenticação automática');
+        debugPrint(
+            'Nenhuma chave válida para autologin. Aguardando login manual.');
         _isAutoLoggingIn = false;
         notifyListeners();
       }
     } catch (e) {
-      debugPrint('Erro na inicialização automática: $e');
       _isAutoLoggingIn = false;
       notifyListeners();
     }
@@ -196,13 +208,11 @@ class AuthProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      // 1. Conectar ao servidor
       final connected = await _socketService.connect();
       if (!connected) {
         throw Exception('Falha na conexão com o servidor');
       }
 
-      // 2. Obter credenciais salvas
       final credentials = await _localStorageService.getUserCredentials();
       if (credentials == null) {
         throw Exception('Credenciais não encontradas');
@@ -210,14 +220,13 @@ class AuthProvider with ChangeNotifier {
 
       final username = credentials['username']!;
 
-      // 3. Tentar autenticação por desafio
       final success = await loginWithChallenge(username);
 
       if (success) {
         debugPrint('Autenticação automática bem-sucedida!');
-        
+
         if (_userId != null) {
-           await _localStorageService.initForUser(_userId!);
+          await _localStorageService.initForUser(_userId!);
         }
 
         await Future.delayed(const Duration(milliseconds: 100));
@@ -239,7 +248,6 @@ class AuthProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      // 1. Primeiro, realizar handshake para criptografia
       final handshakeSuccess = await _handshakeService.initiateHandshake();
       if (!handshakeSuccess) {
         _errorMessage = 'Falha no handshake de criptografia';
@@ -248,7 +256,6 @@ class AuthProvider with ChangeNotifier {
         return false;
       }
 
-      // 2. Iniciar desafio com o servidor
       final challengeResponse = await _initiateChallenge(username);
       if (!challengeResponse['success']) {
         _errorMessage = challengeResponse['message'] ?? 'Erro no desafio';
@@ -259,7 +266,6 @@ class AuthProvider with ChangeNotifier {
 
       final nonceB64 = challengeResponse['data']['nonce'];
 
-      // 3. Assinar o nonce com a chave privada local
       final signature = await _signChallenge(nonceB64);
       if (signature == null) {
         _errorMessage = 'Erro ao assinar desafio';
@@ -268,7 +274,6 @@ class AuthProvider with ChangeNotifier {
         return false;
       }
 
-      // 4. Verificar assinatura com o servidor
       final verifyResponse = await _verifyChallenge(username, signature);
       if (!verifyResponse['success']) {
         _errorMessage = verifyResponse['message'] ?? 'Autenticação falhou';
@@ -277,7 +282,6 @@ class AuthProvider with ChangeNotifier {
         return false;
       }
 
-      // 5. Autenticação bem-sucedida
       final userData = verifyResponse['data']['user_data'];
       _isLoggedIn = true;
       _userId = _parseUserId(userData['user_id']);
@@ -286,7 +290,7 @@ class AuthProvider with ChangeNotifier {
       if (_userId != null) {
         await _localStorageService.initForUser(_userId!);
       } else {
-        debugPrint('❌ Erro crítico: UserId é nulo após login!');
+        debugPrint('Erro crítico: UserId é nulo após login!');
       }
 
       _errorMessage = '';
@@ -335,19 +339,24 @@ class AuthProvider with ChangeNotifier {
 
   Future<String?> _signChallenge(String nonceB64) async {
     try {
-      final credentials = await _localStorageService.getUserCredentials();
-      if (credentials == null) {
-        debugPrint('Credenciais não encontradas localmente');
+      var privateKey = await _localStorageService.getPrivateKey();
+
+      if (privateKey == null ||
+          privateKey.isEmpty ||
+          privateKey == "session_active") {
+        final credentials = await _localStorageService.getUserCredentials();
+        privateKey = credentials?['privateKey'];
+      }
+
+      if (privateKey == null ||
+          privateKey.length < 32 ||
+          privateKey == "session_active") {
+        debugPrint('Chave privada inválida ou ausente para autologin');
         return null;
       }
 
-      final privateKey = credentials['privateKey']!;
-
-      // Decodificar nonce
       final nonce = base64Decode(nonceB64);
-
-      // Assinar o nonce com Ed25519
-      final signature = await _cryptoService.signData(nonce, privateKey);
+      final signature = await _cryptoService.signData(nonce, privateKey!);
 
       debugPrint('Nonce assinado com sucesso');
       return signature;
@@ -390,7 +399,8 @@ class AuthProvider with ChangeNotifier {
     _isLoggedIn = false;
     _userId = null;
     _username = null;
-    _socketService.disconnect();
+    _localStorageService.clearUserCredentials();
+    dispose();
     notifyListeners();
   }
 
@@ -411,13 +421,11 @@ class AuthProvider with ChangeNotifier {
     try {
       if (userIdValue is int) return userIdValue;
       if (userIdValue is String) {
-        // Tenta converter string para int
         return int.tryParse(userIdValue);
       }
       if (userIdValue is double) {
         return userIdValue.toInt();
       }
-      // Tenta converter para string e depois para int
       return int.tryParse(userIdValue.toString());
     } catch (e) {
       debugPrint('Erro ao parser userId: $e, valor: $userIdValue');
