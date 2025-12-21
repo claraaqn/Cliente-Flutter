@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:cliente/screens/chat_screen.dart';
 import 'package:cliente/services/crypto_service.dart';
+import 'package:cliente/services/friend_session_manager.dart';
 import 'package:cliente/services/local_storage_service.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -85,39 +86,22 @@ class _ContactsScreenState extends State<ContactsScreen> {
   }
 
   Future<void> _saveKeys(Map<String, dynamic> data) async {
-    // Use a instância que já existe no seu serviço de preferência
     final idFriendship = data["id_friendship"];
     final encry = data["encryption_key"];
     final hmac = data["hmac_key"];
-
-    debugPrint("$idFriendship");
-    debugPrint("$encry");
-    debugPrint("$hmac");
-
     final cryptoService = CryptoService();
-    final localstorage = LocalStorageService();
 
     if (idFriendship != null && encry != null && hmac != null) {
-      debugPrint(
-          '💾 Salvando as chaves recebidas do servidor para amizade: $idFriendship');
-
-      // Certifique-se de que o idFriendship seja tratado como int
-      final int id = int.parse(idFriendship.toString());
-
-      await localstorage.saveFriendSessionKeys(id, encry, hmac);
-
-      final keys = await localstorage.getFriendSessionKeys(idFriendship);
-
-      final aes = keys?["encryption"];
-      final hmcap = keys?["hmac"];
-
-      debugPrint("$aes");
-      debugPrint("$hmcap");
-
+      await _localstorage.saveFriendSessionKeys(idFriendship, encry, hmac);
       cryptoService.setSessionKeysFriends(
         encryptionKey: base64Decode(encry),
         hmacKey: base64Decode(hmac),
       );
+
+      if (idFriendship != null) {
+        int fId = int.parse(idFriendship.toString());
+        FriendSessionManager().resetSession(fId);
+      }
     }
   }
 
@@ -280,7 +264,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
   // Passo 1: A inicia
   Future<void> _startMutualAuth(Map<String, dynamic> data) async {
     if (_isAuthenticating) {
-      debugPrint("⛔ Autenticação já em andamento (Start). Ignorando.");
       return;
     }
     _isAuthenticating = true;
@@ -309,19 +292,11 @@ class _ContactsScreenState extends State<ContactsScreen> {
     debugPrint("Reciver id: $receiverId");
 
     if (receiverId == null) {
-      debugPrint(
-          "ERRO CRÍTICO: receiverId (Target ID) é nulo! Payload recebido: $data");
       return;
     }
 
-    // 1. Gerar Nonce (ex: 4559)
-    final nonce = cryptoService
-        .generateSalt(); // Reutilizando sua funçao de salt para gerar string aleatoria
-    _sentNonce = nonce; // Guardar para verificar depois
-
-    // 2. Enviar desafio para o Servidor repassar ao Amigo
-    // Nota: Idealmente, esse payload já deveria ser criptografado com a chave de sessão (AES)
-    // Mas para seguir a lógica do desafio, mandaremos claro para ele assinar.
+    final nonce = cryptoService.generateSalt();
+    _sentNonce = nonce;
 
     final payload = {
       "action": "auth_challenge",
@@ -330,14 +305,11 @@ class _ContactsScreenState extends State<ContactsScreen> {
       "senderPubKey": pubKey,
     };
 
-    // Envie via socket
     socketService.sendMessageFriend(payload);
   }
 
-  // Passo 2: B recebe o desafio, assina e manda o seu desafio
   Future<void> _handleAuthChallenge(Map<String, dynamic> message) async {
     if (_isAuthenticating) {
-      debugPrint("⛔ Já estou processando uma autenticação.");
       return;
     }
     _isAuthenticating = true;
@@ -347,20 +319,13 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final cryptoService = CryptoService();
     debugPrint("Recebi desafio de autenticação");
 
-    final senderId = message['sender_id']; // Quem mandou (A)
-    final nonceReceived = message['nonce']; // O número (4559)
+    final senderId = message['sender_id'];
+    final nonceReceived = message['nonce'];
     final userId = authProvider.userId;
-
-    debugPrint("Sender id: $senderId");
-    debugPrint("Reciver id: $userId");
 
     final senderPubKey = message['senderPubKey'];
     if (senderPubKey != null) {
-      debugPrint("Salvando chave pública temporária de A");
       await _localstorage.saveFriendPublicKey(senderId, senderPubKey);
-    } else {
-      debugPrint(
-          "AVISO: Cliente A não enviou chave pública. A validação final falhará.");
     }
 
     final keys = await cryptoService.generateKeyPair();
@@ -370,20 +335,18 @@ class _ContactsScreenState extends State<ContactsScreen> {
     _localstorage.saveMyPrivateKey(userId!, privKey!);
     _localstorage.saveMyPublicteKey(userId, pubKey!);
 
-    // 2. Assinar o nonce recebido
     final signature =
         await cryptoService.signData(utf8.encode(nonceReceived), privKey);
 
-    // 3. Gerar meu próprio desafio (NonceB)
     final myNonce = cryptoService.generateSalt();
-    _sentNonce = myNonce; // Guardo o que eu gerei
+    _sentNonce = myNonce;
 
     final payload = {
       "action": "auth_response_and_challenge",
       "target_id": senderId,
       "original_nonce": nonceReceived,
       "signature": signature, // Prova que sou B
-      "new_nonce": myNonce, // Desafio para A provar quem é
+      "new_nonce": myNonce,
       "reciverId": userId,
       "reciverPubKey": pubKey,
     };
@@ -391,7 +354,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
     socketService.sendMessageFriend(payload);
   }
 
-  // Passo 3: A verifica a assinatura de B e assina o desafio de B
   Future<void> _handleAuthResponseAndChallenge(
       Map<String, dynamic> message) async {
     debugPrint("Verificando resposta do desafio...");
@@ -405,14 +367,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final nonceFromB = message['new_nonce'];
     final reciverId = message["reciverId"];
 
-    debugPrint("Sender id: $senderId");
-    debugPrint("Reciver id: $reciverId");
-
-    // 1. Verificação de Segurança: O nonce que voltou é o mesmo que enviei?
     if (originalNonce != _sentNonce) {
       debugPrint(
           "ALERTA: Nonce incorreto! Esperado: $_sentNonce, Recebido: $originalNonce");
-      _resetAuthState(); // Libera trava pois falhou
+      _resetAuthState();
       return;
     }
 
@@ -420,28 +378,20 @@ class _ContactsScreenState extends State<ContactsScreen> {
       debugPrint("O ID DO REVICER NÃO TÁ INDO");
     }
 
-    // 2. Buscar chave pública de IDENTIDADE do amigo
     final reciverPubKey = message["reciverPubKey"];
     _localstorage.saveFriendPublicKey(reciverId, reciverPubKey);
 
-    // 3. Verificar assinatura
     final isValid = await cryptoService.verifySignature(
         data: utf8.encode(originalNonce),
         signatureB64: signatureB,
         publicKeyB64: reciverPubKey!);
 
     if (!isValid) {
-      debugPrint("ERRO: Assinatura do amigo inválida!");
       return;
     }
 
-    debugPrint(
-        "Amigo autenticado com sucesso! Agora provando minha identidade...");
-
-    // 4. Assinar o desafio de B (NonceB)
     final myPrivKey = await _localstorage.getMyPrivateKey(senderId!);
     if (myPrivKey == null) {
-      debugPrint("ERRO: Minha chave privada não encontrada!");
       return;
     }
 
@@ -457,12 +407,9 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
     socketService.sendMessageFriend(payload);
 
-    // Para A, o processo acabou (ele validou B).
-    // Pode chamar uma função para liberar o chat na UI.
     _onAuthSuccess();
   }
 
-  // Passo 4: B verifica a assinatura de A
   Future<void> _handleFinalVerification(Map<String, dynamic> message) async {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final socketService = authProvider.socketService;
@@ -473,14 +420,12 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final signatureA = message['signature'];
 
     if (originalNonce != _sentNonce) {
-      debugPrint("ALERTA: Nonce incorreto.");
       return;
     }
 
     final friendPubKey = await _localstorage.getFriendPublicKey(senderId);
 
     if (friendPubKey == null) {
-      debugPrint("ERRO: Não tenho a chave pública do amigo $senderId salva.");
       return;
     }
 
@@ -491,7 +436,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
     if (isValid) {
       debugPrint("Mútua autenticação completa! Chat Seguro.");
-      // Avisa o outro lado (opcional, mas bom para UI)
       socketService.sendMessageFriend(
           {"action": "auth_complete", "target_id": senderId});
       _onAuthSuccess();
@@ -551,10 +495,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final receiverPub = message["receiver_public_key"];
     final receiverId = message["receiver_id"];
     final idFriendship = message["id_friendship"];
-
-    debugPrint("Id do sender $senderId");
-    debugPrint("Chave do reciver $receiverPub");
-    debugPrint("Id do request $receiverId");
 
     final handshakeResponse = await socketService.handshakeFriends(
         senderId, receiverPub, receiverId, idFriendship);

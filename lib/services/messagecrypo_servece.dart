@@ -25,7 +25,7 @@ class MessageCryptoService {
     }
 
     try {
-      debugPrint('🔒 Criptografando mensagem: "$plaintext"');
+      debugPrint('Criptografando mensagem: "$plaintext"');
 
       // 1. Cifrar a mensagem com AES-256 CBC
       final encryptedData = await _aesCbcEncrypt(plaintext, _encryptionKey!);
@@ -38,10 +38,9 @@ class MessageCryptoService {
         'hmac': base64Encode(hmac),
       };
 
-      debugPrint('✅ Mensagem criptografada com sucesso');
       return result;
     } catch (e) {
-      debugPrint('❌ Erro ao criptografar mensagem: $e');
+      debugPrint('Erro ao criptografar mensagem: $e');
       rethrow;
     }
   }
@@ -162,6 +161,6 @@ class MessageCryptoService {
   void clearSessionKeys() {
     _encryptionKey = null;
     _hmacKey = null;
-    debugPrint('🗑️ Chaves de sessão limpas');
+    debugPrint('Chaves de sessão limpas');
   }
 }

@@ -46,10 +46,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_localStorage == null) {
-      _localStorage = Provider.of<LocalStorageService>(context, listen: false);
-      debugPrint('✅ LocalStorageService obtido com sucesso');
-    }
+    _localStorage ??= Provider.of<LocalStorageService>(context, listen: false);
   }
 
   Future<void> _initializeData() async {
@@ -92,8 +89,6 @@ class _ChatScreenState extends State<ChatScreen> {
       if (content is String &&
           content.contains('ciphertext') &&
           content.contains('hmac')) {
-        debugPrint(
-            "⏳ Ignorando pacote criptografado bruto. Aguardando versão descriptografada...");
         return;
       }
 
@@ -102,7 +97,6 @@ class _ChatScreenState extends State<ChatScreen> {
       final newMessage = _createMessageFromMap(message, currentUserId);
 
       if (newMessage != null) {
-        // Verifica duplicatas pelo ID ou conteúdo+tempo
         final isDuplicate = _messages.any((msg) {
           if (msg.id != null && newMessage.id != null) {
             return msg.id == newMessage.id;
@@ -127,11 +121,11 @@ class _ChatScreenState extends State<ChatScreen> {
             _saveMessageLocally(newMessage);
           }
         } else {
-          debugPrint('⚠️ Mensagem duplicada ignorada (UI já atualizada)');
+          debugPrint('Mensagem duplicada ignorada (UI já atualizada)');
         }
       }
     } catch (e) {
-      debugPrint('❌ Erro ao processar nova mensagem: $e');
+      debugPrint('Erro ao processar nova mensagem: $e');
     }
   }
 
@@ -156,10 +150,8 @@ class _ChatScreenState extends State<ChatScreen> {
       } else {
         await _localStorage!.saveReceivedMessage(messageData);
       }
-
-      debugPrint('💾 Mensagem salva via LocalStorageService');
     } catch (e) {
-      debugPrint('❌ Erro ao salvar mensagem no LocalStorage: $e');
+      debugPrint('❌Erro ao salvar mensagem no LocalStorage: $e');
     }
   }
 
@@ -173,7 +165,6 @@ class _ChatScreenState extends State<ChatScreen> {
           _isTyping = isTyping;
         });
       }
-      debugPrint('✍️ $username está ${isTyping ? 'digitando' : 'parou'}');
     }
   }
 
@@ -188,10 +179,8 @@ class _ChatScreenState extends State<ChatScreen> {
         });
       }
 
-      debugPrint('🟢 $username está ${isOnline ? 'online' : 'offline'}');
-
       if (isOnline) {
-        debugPrint('🔄 Amigo ficou online, verificando mensagens pendentes...');
+        debugPrint('Amigo ficou online, verificando mensagens pendentes...');
         _checkPendingMessages();
       }
     }
@@ -270,7 +259,7 @@ class _ChatScreenState extends State<ChatScreen> {
         try {
           messageDate = DateTime.parse(msgData['timestamp']);
         } catch (e) {
-          messageDate = DateTime.now(); 
+          messageDate = DateTime.now();
         }
 
         return Message(
@@ -278,9 +267,7 @@ class _ChatScreenState extends State<ChatScreen> {
           senderId: msgData['sender_id'],
           receiverId: widget.friend.id,
           content: msgData['content'],
-
           timestamp: messageDate,
-
           isDelivered: msgData['is_delivered'] == 1,
           isMine: msgData['sender_id'] == currentUserId,
           localId: msgData['local_id'],
@@ -321,7 +308,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _scrollToBottom();
       }
     } catch (e) {
-      debugPrint('❌ Erro ao carregar mensagens locais: $e');
+      debugPrint('Erro ao carregar mensagens locais: $e');
     } finally {
       if (mounted) {
         setState(() {
@@ -333,16 +320,14 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _syncUnsentMessages() async {
     if (_localStorage == null) return;
-    debugPrint('🔄 Sincronizando mensagens não enviadas...');
   }
 
   void _checkPendingMessages() async {
     try {
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       await authProvider.socketService.checkPendingMessages();
-      debugPrint('✅ Verificação de mensagens pendentes concluída');
     } catch (e) {
-      debugPrint('❌ Erro ao verificar mensagens pendentes: $e');
+      debugPrint('Erro ao verificar mensagens pendentes: $e');
     }
   }
 
@@ -392,15 +377,14 @@ class _ChatScreenState extends State<ChatScreen> {
       final socketService = authProvider.socketService;
 
       final response = await socketService.sendMessage(
-          widget.friend.username, text, widget.friend.idfriendship);
+          widget.friend.username, text, widget.friend.idfriendship, widget.friend.id);
 
       if (response['success'] == true) {
-        debugPrint('✅ Mensagem enviada para o servidor');
       } else {
-        debugPrint('❌ Erro ao enviar mensagem: ${response['message']}');
+        debugPrint('Erro ao enviar mensagem: ${response['message']}');
       }
     } catch (e) {
-      debugPrint('❌ Erro ao enviar mensagem: $e');
+      debugPrint('Erro ao enviar mensagem: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Erro ao enviar mensagem: $e')),
       );
@@ -476,24 +460,14 @@ class _ChatScreenState extends State<ChatScreen> {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final socketService = authProvider.socketService;
 
-    try {
-      socketService.sendTypingStart(widget.friend.username);
-      debugPrint('✍️ Start typing enviado para ${widget.friend.username}');
-    } catch (e) {
-      debugPrint('❌ Erro ao enviar typing start: $e');
-    }
+    socketService.sendTypingStart(widget.friend.username);
   }
 
   void _sendTypingStop() {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final socketService = authProvider.socketService;
 
-    try {
-      socketService.sendTypingStop(widget.friend.username);
-      debugPrint('🛑 Stop typing enviado para ${widget.friend.username}');
-    } catch (e) {
-      debugPrint('❌ Erro ao enviar typing stop: $e');
-    }
+    socketService.sendTypingStop(widget.friend.username);
   }
 
   void _clearTypingTimer() {

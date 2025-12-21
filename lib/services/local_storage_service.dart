@@ -77,7 +77,6 @@ class LocalStorageService {
         'is_read': isRead,
       });
 
-      debugPrint('💾 Mensagem salva localmente: ${message['id']}');
     } else {
       debugPrint('Mensagem já existe: ${message['id']} - ignorando duplicata');
     }
@@ -170,6 +169,24 @@ class LocalStorageService {
       debugPrint('❌ Erro ao apagar histórico: $e');
       return 0;
     }
+  }
+
+  Future<int?> getFriendshipId(int friendId) async {
+    final db = await database;
+    // Ajuste a query conforme a estrutura da sua tabela de amigos
+    // Exemplo supondo tabela 'friends' com colunas 'user_id' e 'id_friendship'
+    final result = await db.query(
+      'friends', // Nome da sua tabela de amigos
+      columns: ['id_friendship'],
+      where: 'user_id = ?', // Ou 'friend_id' dependendo do seu schema
+      whereArgs: [friendId],
+      limit: 1,
+    );
+
+    if (result.isNotEmpty) {
+      return result.first['id_friendship'] as int?;
+    }
+    return null;
   }
 
   Future<void> savePrivateKey(String privateKey) async {

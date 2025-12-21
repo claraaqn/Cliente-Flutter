@@ -8,6 +8,7 @@ import 'package:cliente/services/crypto_service.dart';
 import 'package:cliente/services/messagecrypo_servece.dart';
 import 'package:flutter/widgets.dart';
 import 'package:cliente/services/local_storage_service.dart';
+import 'package:cliente/services/friend_session_manager.dart';
 
 class SocketService {
   Socket? _socket;
@@ -41,6 +42,7 @@ class SocketService {
   bool get isAuthenticated => _authenticatedUserId != null;
 
   HandshakeService? _handshakeService;
+  final _friendSessionManager = FriendSessionManager();
 
   void setHandshakeService(HandshakeService service) {
     _handshakeService = service;
@@ -342,6 +344,7 @@ class SocketService {
     );
 
     debugPrint('Handshake realizado - Chaves de sessão geradas');
+    _friendSessionManager.resetSession(idFriendship);
 
     return _sendAndWaitForResponse({
       "action": "handshake_complete",
@@ -374,8 +377,8 @@ class SocketService {
   }
 
   //! Envia mensagem
-  Future<Map<String, dynamic>> sendMessage(
-      String receiverUsername, String content, int idFriendship) async {
+  Future<Map<String, dynamic>> sendMessage(String receiverUsername,
+      String content, int idFriendship, int reciverId) async {
     if (_handshakeService != null) {
       if (_handshakeService!.sessionManager.shouldRenegotiate()) {
         debugPrint("Limite da sessão atingido. Renegociando chaves...");
@@ -398,7 +401,7 @@ class SocketService {
       return {'success': false, 'message': 'Dados inválidos'};
     }
 
-    debugPrint('💬 Enviando mensagem para $receiverUsername: $content');
+    debugPrint('Enviando mensagem para $receiverUsername: $content');
 
     final localId = 'local_${DateTime.now().millisecondsSinceEpoch}_$_userId';
 
@@ -420,6 +423,19 @@ class SocketService {
     }
 
     try {
+      if (_friendSessionManager.shouldRotate(idFriendship)) {
+        try {
+          String? receiverPub =
+              await _localStorage.getFriendPublicKey(reciverId);
+          if (receiverPub != null) {
+            await handshakeFriends(
+                _authenticatedUserId!, receiverPub, reciverId, idFriendship);
+          }
+        } catch (e) {
+          debugPrint("Erro ao tentar renovar sessão: $e");
+        }
+      }
+
       Map<String, dynamic> plainMessage = {
         'action': 'send_message',
         'receiver_username': receiverUsername,
@@ -433,13 +449,13 @@ class SocketService {
 
       // 4. CAMADA 1: Criptografia de Amigo (Ponta-a-Ponta)
       bool friendReady = await ensureSessionReady(idFriendship);
+      _friendSessionManager.incrementMessageCount(idFriendship);
 
       if (friendReady) {
         debugPrint("Criptografando conteúdo para o amigo...");
         try {
           final encryptedContentMap =
               await _crypto.encryptMessageFriend(content);
-
 
           plainMessage['content'] = json.encode(encryptedContentMap);
         } catch (e) {
@@ -454,8 +470,7 @@ class SocketService {
       final Map<String, dynamic> messageToSend;
 
       if (_isEncryptionEnabled) {
-        // Chaves do servidor (Server Handshake)
-       _handshakeService?.sessionManager.incrementMessageCount();
+        _handshakeService?.sessionManager.incrementMessageCount();
 
         final encryptedPacket =
             await _crypto.encryptMessage(json.encode(plainMessage));
@@ -529,8 +544,6 @@ class SocketService {
     if (!_isAuthenticated() || !_isConnected) return;
 
     try {
-      debugPrint('🔄 Verificando mensagens pendentes no servidor...');
-
       final response = await _sendAndWaitForResponse(
         {
           'action': 'get_pending_messages',
@@ -706,7 +719,6 @@ class SocketService {
         processedMessage = await _decryptReceivedMessage(message);
       }
 
-      // 2. Camada de Amigo (Abre o conteúdo P2P)
       if (processedMessage['action'] == 'new_message') {
         processedMessage = await _tryDecryptFriendLayer(processedMessage);
       }
@@ -737,7 +749,6 @@ class SocketService {
         final idValue = message['id_friendship'] ?? message['id_friendship'];
 
         if (idValue == null) {
-          debugPrint("⚠️ id_friendship ausente no mapa da mensagem.");
           return message;
         }
 
@@ -754,14 +765,12 @@ class SocketService {
           final String decryptedText =
               await _crypto.decryptMessageFriend(cryptoPayload);
           message['content'] = decryptedText;
-          debugPrint("🔓 Conteúdo P2P descriptografado: $decryptedText");
         } else {
-          message['content'] =
-              "🔒 Mensagem criptografada (Chaves indisponíveis)";
+          message['content'] = "Mensagem criptografada (Chaves indisponíveis)";
         }
       }
     } catch (e) {
-      debugPrint("Aviso: Falha ao processar camada P2P: $e");
+      debugPrint("Aviso: Falha ao processar camada: $e");
     }
     return message;
   }
