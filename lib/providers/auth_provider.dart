@@ -356,7 +356,7 @@ class AuthProvider with ChangeNotifier {
       }
 
       final nonce = base64Decode(nonceB64);
-      final signature = await _cryptoService.signData(nonce, privateKey!);
+      final signature = await _cryptoService.signData(nonce, privateKey);
 
       debugPrint('Nonce assinado com sucesso');
       return signature;

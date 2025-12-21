@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cliente/providers/auth_provider.dart';
 import 'package:cliente/models/friend.dart';
+import 'dart:async';
 
 class ContactsScreen extends StatefulWidget {
   const ContactsScreen({super.key});
@@ -27,6 +28,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
   bool _isAuthenticating = false;
 
   final _localstorage = LocalStorageService();
+  Timer? _refreshTimer;
 
   @override
   void initState() {
@@ -34,6 +36,12 @@ class _ContactsScreenState extends State<ContactsScreen> {
     _initializeServices();
     _loadFriends();
     _loadPendingRequests();
+
+    // _refreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+    //   if (mounted) {
+    //     _loadFriends();
+    //   }
+    // });
   }
 
   void _resetAuthState() {
@@ -52,9 +60,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
       if (action == 'friend_request') {
         _showFriendRequestNotification(message);
-        _loadPendingRequests();
       } else if (action == 'send_friend_request_response') {
         _handleFriendRequestResponse(message);
+      } else if (action == 'pedding_request') {
+        _loadPendingRequests();
       } else if (action == 'get_friend_requests_response') {
         _handlePendingRequestsResponse(message);
       } else if (action == 'respond_friend_request_response') {
@@ -73,6 +82,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
         _handleFinalVerification(message);
       } else if (action == "auth_complete") {
         debugPrint("AUTENTICAÇÃO MÚTUA CONCLUÍDA COM SUCESSO!");
+        _onAuthSuccess();
       } else if (action == "chaves_para_b") {
         _saveKeys(message);
       } else if (action == "force_logout") {
@@ -154,10 +164,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
           _isLoading = false;
         });
       } else {
-        setState(() {
-          _errorMessage = response['message'] ?? 'Erro desconhecido';
-          _isLoading = false;
-        });
+        debugPrint("inferno");
       }
     } catch (e) {
       setState(() {
@@ -171,8 +178,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final socketService = authProvider.socketService;
     final userId = authProvider.userId;
-
-    debugPrint("ID de quem tá enviando o pedido de amizade $userId");
 
     setState(() {
       _isLoading = true;
@@ -192,10 +197,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
           _errorMessage = response['message'] ?? 'Erro desconhecido';
         });
       }
-    } catch (e) {
-      setState(() {
-        _errorMessage = 'Erro ao adicionar amigo: $e';
-      });
     } finally {
       setState(() {
         _isLoading = false;
@@ -214,20 +215,15 @@ class _ContactsScreenState extends State<ContactsScreen> {
           await socketService.respondFriendRequest('accepted', userId);
 
       if (response['success'] == true) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(response['message'] ?? 'Solicitação aceita')),
-        );
+        setState(() {
+          _pendingRequests.removeWhere((req) => req['sender_id']);
+          _pendingRequestsCount = _pendingRequests.length;
+        });
         _loadPendingRequests();
         _loadFriends();
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(response['message'] ?? 'Erro ao aceitar')),
-        );
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erro ao aceitar solicitação: $e')),
-      );
+      debugPrint("Erro: $e");
     }
   }
 
@@ -242,10 +238,11 @@ class _ContactsScreenState extends State<ContactsScreen> {
           await socketService.respondFriendRequest(requestId, 'rejected');
 
       if (response['success'] == true) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text(response['message'] ?? 'Solicitação rejeitada')),
-        );
+        setState(() {
+          _pendingRequests
+              .removeWhere((req) => req['receiver_id'] == requestId);
+          _pendingRequestsCount = _pendingRequests.length;
+        });
         _loadPendingRequests();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -443,7 +440,9 @@ class _ContactsScreenState extends State<ContactsScreen> {
   }
 
   void _onAuthSuccess() {
-    // TODO: front só atualizar quando termina turo
+    debugPrint("Atualizando lista de contatos após autenticação segura.");
+    _loadFriends();
+    _isAuthenticating = false;
   }
 
   void _handleFriendRequestResponse(Map<String, dynamic> response) {
@@ -452,10 +451,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
         SnackBar(content: Text(response['message'] ?? 'Solicitação enviada')),
       );
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content: Text(response['message'] ?? 'Erro ao enviar solicitação')),
-      );
+      debugPrint("Erro");
     }
   }
 
@@ -539,56 +535,102 @@ class _ContactsScreenState extends State<ContactsScreen> {
     );
   }
 
-  void _showPendingRequestsDialog() {
+void _showPendingRequestsDialog() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Solicitações de Amizade Pendentes'),
-        content: _pendingRequests.isEmpty
-            ? const Text('Nenhuma solicitação pendente')
-            : SizedBox(
-                width: double.maxFinite,
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: _pendingRequests.length,
-                  itemBuilder: (context, index) {
-                    final request = _pendingRequests[index];
-                    return ListTile(
-                      leading: CircleAvatar(
-                        child: Text(
-                            request['sender_username']?[0]?.toUpperCase() ??
-                                '?'),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Solicitações Pendentes'),
+              contentPadding: EdgeInsets.zero, 
+              titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 10),
+              content: _pendingRequests.isEmpty
+                  ? const Padding(
+                      padding: EdgeInsets.all(24.0),
+                      child: Text('Nenhuma solicitação pendente'),
+                    )
+                  : SizedBox(
+                      width: double.maxFinite,
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: _pendingRequests.length,
+                        itemBuilder: (context, index) {
+                          final request = _pendingRequests[index];
+                          String formattedDate = 'Data desconhecida';
+                          try {
+                            if (request['created_at'] != null) {
+                              DateTime dt = DateTime.parse(request['created_at'].toString());
+                              String hour = dt.hour.toString().padLeft(2, '0');
+                              String minute = dt.minute.toString().padLeft(2, '0');
+                              String day = dt.day.toString().padLeft(2, '0');
+                              String month = dt.month.toString().padLeft(2, '0');
+                              String year = dt.year.toString();
+                              formattedDate = "$hour:$minute $day/$month/$year";
+                            }
+                          } catch (e) {
+                            formattedDate = request['created_at'].toString();
+                          }
+
+                          return ListTile(
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                            leading: CircleAvatar(
+                              radius: 18,
+                              child: Text(request['sender_username']?[0]?.toUpperCase() ?? '?'),
+                            ),
+                            title: Text(
+                              request['sender_username'] ?? 'Usuário',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                            ),
+                            subtitle: Text(
+                              'Enviado em: $formattedDate',
+                              style: const TextStyle(fontSize: 10), 
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(),
+                                  icon: const Icon(Icons.check_circle, color: Colors.green, size: 28),
+                                  onPressed: () async {
+                                    await _acceptFriendRequest(
+                                        request['sender_id'],
+                                        request['sender_public_key']);
+                                    setDialogState(() {});
+                                  },
+                                ),
+                                const SizedBox(width: 8),
+                                IconButton(
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(),
+                                  icon: const Icon(Icons.cancel, color: Colors.red, size: 28),
+                                  onPressed: () async {
+                                    await _rejectFriendRequest(request['receiver_id']);
+                                    setDialogState(() {});
+                                  },
+                                ),
+                              ],
+                            ),
+                          );
+                        },
                       ),
-                      title: Text(
-                          request['sender_username'] ?? 'Usuário desconhecido'),
-                      subtitle: Text(request['created_at']?.toString() ?? ''),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.check, color: Colors.green),
-                            onPressed: () => _acceptFriendRequest(
-                                request['sender_id'],
-                                request['sender_public_key']),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.close, color: Colors.red),
-                            onPressed: () =>
-                                _rejectFriendRequest(request['receiver_id']),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
+                    ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Fechar'),
                 ),
-              ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Fechar'),
-          ),
-        ],
-      ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
@@ -868,6 +910,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   @override
   void dispose() {
+    _refreshTimer?.cancel();
     _friendUsernameController.dispose();
     super.dispose();
   }

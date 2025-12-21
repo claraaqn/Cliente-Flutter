@@ -37,7 +37,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
-    debugPrint('🚀 ChatScreen iniciado para: ${widget.friend.username}');
+    debugPrint('ChatScreen iniciado para: ${widget.friend.username}');
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeData();
     });
@@ -133,9 +133,8 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_localStorage == null) return;
 
     try {
-      // Criamos o mapa no formato que o seu LocalStorageService espera
       final messageData = {
-        'id': message.id, // server_id
+        'id': message.id, 
         'sender_id': message.senderId,
         'sender_username': message.isMine ? 'Eu' : widget.friend.username,
         'receiver_username': message.isMine ? widget.friend.username : 'Eu',
@@ -151,7 +150,7 @@ class _ChatScreenState extends State<ChatScreen> {
         await _localStorage!.saveReceivedMessage(messageData);
       }
     } catch (e) {
-      debugPrint('❌Erro ao salvar mensagem no LocalStorage: $e');
+      debugPrint('Erro ao salvar mensagem no LocalStorage: $e');
     }
   }
 
@@ -195,7 +194,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final content = data['content'] ?? '';
 
       if (senderId == null || receiverId == null || currentUserId == null) {
-        debugPrint('❌ Dados incompletos para criar mensagem');
+        debugPrint('Dados incompletos para criar mensagem');
         return null;
       }
 
@@ -205,7 +204,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
       if (!isMessageForThisChat) {
         debugPrint(
-            '❌ Mensagem não é para este chat: currentUser=$currentUserId, friendId=${widget.friend.id}');
+            'Mensagem não é para este chat: currentUser=$currentUserId, friendId=${widget.friend.id}');
         return null;
       }
 
@@ -215,7 +214,7 @@ class _ChatScreenState extends State<ChatScreen> {
       } else {
         final uniqueString = '${content}_${data['timestamp']}_$senderId';
         messageId = uniqueString.hashCode;
-        debugPrint('🆔 ID gerado localmente: $messageId para "$content"');
+        debugPrint('ID gerado localmente: $messageId para "$content"');
       }
 
       final isMine = senderId == currentUserId;
@@ -234,8 +233,8 @@ class _ChatScreenState extends State<ChatScreen> {
         hasError: false,
       );
     } catch (e) {
-      debugPrint('❌ Erro ao criar mensagem: $e');
-      debugPrint('❌ Dados da mensagem: $data');
+      debugPrint('Erro ao criar mensagem: $e');
+      debugPrint('Dados da mensagem: $data');
       return null;
     }
   }
@@ -276,7 +275,6 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       }).toList();
 
-      // Agora a ordenação vai funcionar porque as datas são diferentes
       messagesList.sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
       if (mounted) {
@@ -413,14 +411,12 @@ class _ChatScreenState extends State<ChatScreen> {
             onPressed: () async {
               Navigator.pop(context);
 
-              // 1. Chama o serviço para apagar do banco SQL
               await _localStorage!
                   .deleteConversationHistory(widget.friend.username);
 
-              // 2. Limpa a lista na memória para atualizar a UI imediatamente
               setState(() {
                 _messages
-                    .clear(); // Substitua pelo nome da sua lista de mensagens
+                    .clear();
               });
 
               ScaffoldMessenger.of(context).showSnackBar(
@@ -481,7 +477,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void _scrollToBottom() {
     if (_scrollController.hasClients) {
       _scrollController.animateTo(
-        0.0, // Com reverse:true, 0.0 é o fundo da lista
+        0.0, 
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOut,
       );
@@ -500,8 +496,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final difference = now.difference(lastSeen);
 
     if (difference.inMinutes < 1) return 'Visto agora';
-    if (difference.inMinutes < 60)
+    if (difference.inMinutes < 60) {
       return 'Visto há ${difference.inMinutes} min';
+    }
     if (difference.inHours < 24) return 'Visto há ${difference.inHours} h';
     if (difference.inDays < 7) return 'Visto há ${difference.inDays} dias';
 
@@ -517,13 +514,12 @@ class _ChatScreenState extends State<ChatScreen> {
         margin: EdgeInsets.only(
           top: 4,
           bottom: 4,
-          left: isMe ? 50 : 0, // Dá espaço para não encostar na borda oposta
+          left: isMe ? 50 : 0, 
           right: isMe ? 0 : 50,
         ),
         padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
         decoration: BoxDecoration(
-          // Cores inspiradas no modo claro do WhatsApp
-          color: isMe ? const Color(0xFFDCF8C6) : Colors.white,
+          color: isMe ? Colors.blue[100] : Colors.blue[300],
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(12),
             topRight: const Radius.circular(12),
@@ -539,7 +535,6 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         child: IntrinsicWidth(
-          // Ajusta a largura ao conteúdo
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
@@ -578,14 +573,13 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _buildChatList() {
-    // Invertemos a lista para que a mensagem mais recente seja o índice 0
     final reversedMessages = _messages.reversed.toList();
 
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
       itemCount: reversedMessages.length,
-      reverse: true, // 👈 CRÍTICO: Faz a lista começar de baixo para cima
+      reverse: true,
       itemBuilder: (context, index) {
         final message = reversedMessages[index];
         return _buildWhatsAppBubble(message);
@@ -634,7 +628,7 @@ class _ChatScreenState extends State<ChatScreen> {
         actions: [
           IconButton(
             icon: const Icon(
-                Icons.delete_sweep_outlined), // Ícone sugerido para limpeza
+                Icons.delete_sweep_outlined),
             onPressed: _clearChatHistory,
           ),
         ],
