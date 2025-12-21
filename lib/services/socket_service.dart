@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
+import 'package:cliente/services/hand_shake_service.dart';
 import 'package:uuid/uuid.dart';
 import 'dart:async';
 import 'dart:typed_data';
@@ -38,6 +39,12 @@ class SocketService {
 
   int? _authenticatedUserId;
   bool get isAuthenticated => _authenticatedUserId != null;
+
+  HandshakeService? _handshakeService;
+
+  void setHandshakeService(HandshakeService service) {
+    _handshakeService = service;
+  }
 
   void setAuthenticatedUser({required int userId, required String username}) {
     _authenticatedUserId = userId;
@@ -230,23 +237,29 @@ class SocketService {
   Future<Map<String, dynamic>> sendHandshakeInit({
     required String dhePublicKey,
     required String salt,
+    required bool isRenegotiation,
   }) async {
-    // Apenas envia o handshake, o processamento fica no HandshakeService
-    final response = await _sendAndWaitForResponse(
-      {
-        'action': 'handshake_init',
-        'dhe_public_key': dhePublicKey,
-        'salt': salt,
-        'request_id': DateTime.now().millisecondsSinceEpoch.toString(),
-      },
-      'handshake_response',
-    );
+    final response = {
+      'action': 'handshake_init',
+      'dhe_public_key': dhePublicKey,
+      'salt': salt,
+      'request_id': DateTime.now().millisecondsSinceEpoch.toString(),
+    };
 
-    if (response['success'] == true) {
-      enableEncryption();
+    if (isRenegotiation && _isEncryptionEnabled) {
+      final encryptedPacket =
+          await _crypto.encryptMessage(json.encode(response));
+
+      final wrapper = {
+        'action': 'encrypted_message',
+        ...encryptedPacket,
+      };
+
+      return _sendAndWaitForResponse(wrapper, 'handshake_response');
+    } else {
+      // 🔓 INICIAL: Envia em texto plano
+      return _sendAndWaitForResponse(response, 'handshake_response');
     }
-
-    return response;
   }
 
   //? funciona - amizade
@@ -363,6 +376,19 @@ class SocketService {
   //! Envia mensagem
   Future<Map<String, dynamic>> sendMessage(
       String receiverUsername, String content, int idFriendship) async {
+    if (_handshakeService != null) {
+      if (_handshakeService!.sessionManager.shouldRenegotiate()) {
+        debugPrint("Limite da sessão atingido. Renegociando chaves...");
+        bool renewed =
+            await _handshakeService!.initiateHandshake(isRenegotiation: true);
+        if (!renewed) {
+          return {
+            'success': false,
+            'message': 'Falha ao renovar chaves de sessão'
+          };
+        }
+      }
+    }
     // 1. Validações Básicas
     if (!_isAuthenticated()) {
       return {'success': false, 'message': 'Usuário não autenticado'};
@@ -390,7 +416,7 @@ class SocketService {
       await _localStorage.saveMessageLocally(messageData);
       debugPrint('Mensagem salva localmente: $localId');
     } catch (e) {
-      debugPrint('⚠️ Erro ao salvar localmente (DB não iniciado?): $e');
+      debugPrint('Erro ao salvar localmente (DB não iniciado?): $e');
     }
 
     try {
@@ -409,22 +435,19 @@ class SocketService {
       bool friendReady = await ensureSessionReady(idFriendship);
 
       if (friendReady) {
-        debugPrint("🔒 Criptografando conteúdo para o amigo...");
+        debugPrint("Criptografando conteúdo para o amigo...");
         try {
-          // Criptografa o conteúdo original
           final encryptedContentMap =
               await _crypto.encryptMessageFriend(content);
 
-          // ✅ CRÍTICO: Serializa o mapa para String JSON.
-          // O servidor verá apenas uma string, mas o destinatário saberá abrir.
+
           plainMessage['content'] = json.encode(encryptedContentMap);
         } catch (e) {
-          debugPrint("❌ Erro ao cifrar conteúdo de amigo: $e");
-          // Fallback: Se falhar a cifra de amigo, decide se envia em texto claro ou cancela
+          debugPrint("Erro ao cifrar conteúdo de amigo: $e");
         }
       } else {
         debugPrint(
-            "⚠️ Chaves de amigo não encontradas. Enviando conteúdo legível para o servidor.");
+            "Chaves de amigo não encontradas. Enviando conteúdo legível para o servidor.");
       }
 
       // 5. CAMADA 2: Criptografia de Servidor (Túnel)
@@ -432,6 +455,8 @@ class SocketService {
 
       if (_isEncryptionEnabled) {
         // Chaves do servidor (Server Handshake)
+       _handshakeService?.sessionManager.incrementMessageCount();
+
         final encryptedPacket =
             await _crypto.encryptMessage(json.encode(plainMessage));
         messageToSend = {
@@ -467,7 +492,7 @@ class SocketService {
 
       return response;
     } catch (e) {
-      debugPrint('❌ Erro crítico no envio: $e');
+      debugPrint('Erro crítico no envio: $e');
       return {
         'success': false,
         'message': 'Erro no envio: $e',
@@ -482,8 +507,6 @@ class SocketService {
       return true;
     }
 
-    debugPrint("⚠️ Chaves não estão na RAM. Tentando restaurar do disco...");
-
     // 2. Tenta restaurar do LocalStorage (Cache)
     final keys = await _localStorage.getFriendSessionKeys(idFriendship);
     if (keys != null) {
@@ -492,10 +515,9 @@ class SocketService {
           encryptionKey: base64Decode(keys['encryption']!),
           hmacKey: base64Decode(keys['hmac']!),
         );
-        debugPrint("✅ Chaves restauradas com sucesso!");
         return true;
       } catch (e) {
-        debugPrint("❌ Erro ao decodificar chaves do cache: $e");
+        debugPrint("Erro ao decodificar chaves do cache: $e");
       }
     }
 

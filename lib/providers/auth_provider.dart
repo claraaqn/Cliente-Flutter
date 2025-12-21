@@ -15,6 +15,9 @@ class AuthProvider with ChangeNotifier {
   AuthProvider() : _localStorageService = LocalStorageService() {
     _socketService = SocketServiceFactory.createSocketService();
     _handshakeService = HandshakeService(_socketService, _cryptoService);
+
+    _socketService.setHandshakeService(_handshakeService);
+    
     log('AuthProvider inicializado com: ${_socketService.runtimeType}');
 
     _initializeAutoLogin();
