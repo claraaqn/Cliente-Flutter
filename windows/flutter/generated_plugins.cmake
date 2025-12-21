@@ -3,7 +3,6 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
-  dargon2_flutter_desktop
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST
