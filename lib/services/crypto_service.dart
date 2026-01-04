@@ -150,7 +150,7 @@ class CryptoService {
   }
 
   void setSessionKeysFriends(
-      {required int friendshipId, 
+      {required int friendshipId,
       required Uint8List encryptionKey,
       required Uint8List hmacKey}) {
     final service = MessageCryptoService();
@@ -197,7 +197,7 @@ class CryptoService {
 
   Future<String> signData(Uint8List data, String privateKeyB64) async {
     try {
-      final privateKeyBytes = base64Decode(privateKeyB64);
+      Uint8List privateKeyBytes = base64Decode(privateKeyB64);
 
       final keyPair = await _ed25519.newKeyPairFromSeed(privateKeyBytes);
 
@@ -239,5 +239,4 @@ class CryptoService {
       return false;
     }
   }
-
 }
