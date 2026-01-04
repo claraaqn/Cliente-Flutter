@@ -274,7 +274,6 @@ class SocketService {
 
       return _sendAndWaitForResponse(wrapper, 'handshake_response');
     } else {
-      // 🔓 INICIAL: Envia em texto plano
       return _sendAndWaitForResponse(response, 'handshake_response');
     }
   }
@@ -323,6 +322,7 @@ class SocketService {
   Future<Map<String, dynamic>> handshakeFriends(
       int senderId, String receiverPub, int reciverId, int idFriendship) async {
     debugPrint('Começando HandShake');
+    //! refatorar 
 
     _localStorage.saveFriendPublicKey(reciverId, receiverPub);
 
@@ -345,13 +345,13 @@ class SocketService {
     final encBase64 = base64Encode(sessionKeys['encryption']!);
     final hmacBase64 = base64Encode(sessionKeys['hmac']!);
 
-    debugPrint('💾 Salvando as chaves para o id de amizade: $idFriendship');
+    debugPrint('Salvando as chaves para o id de amizade: $idFriendship');
     await _localStorage.saveFriendSessionKeys(
         idFriendship, encBase64, hmacBase64);
 
     final check = await _localStorage.getFriendSessionKeys(idFriendship);
     debugPrint(
-        '🔍 Verificação pós-salvamento: ${check != null ? "Sucesso" : "Falha"}');
+        'Verificação pós-salvamento: ${check != null ? "Sucesso" : "Falha"}');
 
     _crypto.setSessionKeysFriends(
       friendshipId: idFriendship,
@@ -359,8 +359,11 @@ class SocketService {
       hmacKey: sessionKeys['hmac']!,
     );
 
+    _localStorage.saveFriendSessionKeys(idFriendship, encBase64, hmacBase64);
+
     debugPrint('Handshake realizado - Chaves de sessão geradas');
     _friendSessionManager.resetSession(idFriendship);
+     //! refatorar 
 
     return _sendAndWaitForResponse({
       "action": "handshake_complete",
@@ -533,9 +536,6 @@ class SocketService {
   }
 
   Future<bool> ensureSessionReady(int idFriendship) async {
-    // 1. Verifica se já está na RAM (Rápido)
-
-    // 2. Tenta restaurar do LocalStorage (Cache)
     final keys = await _localStorage.getFriendSessionKeys(idFriendship);
     if (keys != null) {
       try {
@@ -550,7 +550,7 @@ class SocketService {
       }
     }
 
-    debugPrint("❌ Nenhuma chave encontrada no cache. Handshake necessário.");
+    debugPrint("Nenhuma chave encontrada no cache. Handshake necessário.");
     return false;
   }
 

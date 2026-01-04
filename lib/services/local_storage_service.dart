@@ -171,7 +171,7 @@ class LocalStorageService {
   Future<int?> getFriendshipId(int friendId) async {
     final db = await database;
     final result = await db.query(
-      'friends', 
+      'friends',
       columns: ['id_friendship'],
       where: 'user_id = ?',
       whereArgs: [friendId],
@@ -350,6 +350,7 @@ class LocalStorageService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString("session_enc_$idFriendship", encKey);
     await prefs.setString("session_hmac_$idFriendship", hmacKey);
+    debugPrint("Chave de amigos salvas");
   }
 
   Future<Map<String, String>?> getFriendSessionKeys(int idFriendship) async {

@@ -258,6 +258,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   String? _sentNonce;
 
+  //! autenticação
   Future<void> _startMutualAuth(Map<String, dynamic> data) async {
     if (_isAuthenticating) {
       return;
@@ -479,6 +480,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
     }
   }
 
+  //! aceitar solicitação de amizade
   Future<void> _handleFriendRequestAccepted(
       Map<String, dynamic> message) async {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);

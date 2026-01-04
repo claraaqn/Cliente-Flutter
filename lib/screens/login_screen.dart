@@ -24,12 +24,15 @@ class _LoginScreenState extends State<LoginScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      authProvider.addListener(_handleAuthChanges);
       authProvider.initialize();
     });
   }
 
   @override
   void dispose() {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    authProvider.removeListener(_handleAuthChanges);
     _usernameController.dispose();
     _passwordController.dispose();
     super.dispose();
@@ -97,6 +100,18 @@ class _LoginScreenState extends State<LoginScreen> {
           _isLoading = false;
         });
       }
+    }
+  }
+
+  void _handleAuthChanges() {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    if (authProvider.isLoggedIn && mounted) {
+      authProvider.removeListener(_handleAuthChanges);
+
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const ContactsScreen()),
+      );
     }
   }
 
