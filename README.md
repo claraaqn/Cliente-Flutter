@@ -70,7 +70,6 @@ flutter run
 Você pode baixar a versão pronta para instalação diretamente na aba **Releases** deste repositório.
 
 * Arquivo: `app-release.apk`
-* Localização original da build: `build\app\outputs\flutter-apk\app-release.apk`
 
 ## Repositórios Relacionados
 
