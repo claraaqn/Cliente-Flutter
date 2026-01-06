@@ -1,4 +1,3 @@
-import 'package:cliente/database_helper.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cliente/providers/auth_provider.dart';
@@ -19,6 +18,8 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   String _errorMessage = '';
 
+  AuthProvider? _authProvider;
+
   @override
   void initState() {
     super.initState();
@@ -30,9 +31,14 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _authProvider = Provider.of<AuthProvider>(context, listen: false);
+  }
+
+  @override
   void dispose() {
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    authProvider.removeListener(_handleAuthChanges);
+    _authProvider?.removeListener(_handleAuthChanges);
     _usernameController.dispose();
     _passwordController.dispose();
     super.dispose();
@@ -46,18 +52,6 @@ class _LoginScreenState extends State<LoginScreen> {
         _errorMessage = authProvider.errorMessage;
       });
     }
-  }
-
-  void _showErrorSnackBar(String message) {
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.red,
-        duration: const Duration(seconds: 3),
-      ),
-    );
   }
 
   Future<void> _login(BuildContext context) async {
@@ -77,22 +71,16 @@ class _LoginScreenState extends State<LoginScreen> {
       );
 
       if (success && mounted) {
-        final username = _usernameController.text.trim();
-        await DatabaseHelper.instance.initForUser(username);
-
-        debugPrint(
-            'Banco inicializado para $username - Navegando para ContactsScreen');
-
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const ContactsScreen()),
         );
       } else if (mounted) {
-        _showErrorSnackBar(authProvider.errorMessage);
+        debugPrint(authProvider.errorMessage);
       }
     } catch (e) {
       if (mounted) {
-        _showErrorSnackBar('Erro durante o login: $e');
+        debugPrint('Erro durante o login: $e');
       }
     } finally {
       if (mounted) {

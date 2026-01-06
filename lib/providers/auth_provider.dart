@@ -68,8 +68,7 @@ class AuthProvider with ChangeNotifier {
       final derivedPublicKey = testKeyPair['publicKey']!;
 
       if (publicKey != derivedPublicKey) {
-        _errorMessage = 'Erro: Chaves não correspondem';
-        debugPrint('ERRO: As chaves pública e privada não correspondem!');
+        debugPrint('Erro: Chaves não correspondem');
         return false;
       }
 
@@ -83,7 +82,6 @@ class AuthProvider with ChangeNotifier {
         await _localStorageService.saveUserCredentials(username, privateKey);
         await _localStorageService.savePrivateKey(privateKey);
 
-        _errorMessage = '';
         notifyListeners();
         return true;
       } else {
@@ -93,7 +91,7 @@ class AuthProvider with ChangeNotifier {
       }
     } catch (e) {
       _isLoading = false;
-      _errorMessage = 'Erro de conexão: $e';
+     debugPrint('Erro de conexão: $e');
       notifyListeners();
       return false;
     } finally {
@@ -104,13 +102,12 @@ class AuthProvider with ChangeNotifier {
 
   Future<bool> login(String username, String password) async {
     _isLoading = true;
-    _errorMessage = '';
     notifyListeners();
 
     try {
       final handshakeSuccess = await _handshakeService.initiateHandshake();
       if (!handshakeSuccess) {
-        _errorMessage = 'Falha no handshake';
+       debugPrint('Falha no handshake');
         _isLoading = false;
         notifyListeners();
         return false;
@@ -152,7 +149,7 @@ class AuthProvider with ChangeNotifier {
                 debugPrint(
                     "Novas chaves geradas e sincronizadas com o servidor.");
               } else {
-                _errorMessage = "Falha ao registrar novo dispositivo.";
+               debugPrint("Falha ao registrar novo dispositivo.");
                 _isLoading = false;
                 notifyListeners();
                 return false;
@@ -235,7 +232,6 @@ class AuthProvider with ChangeNotifier {
       }
     } catch (e) {
       debugPrint('Autenticação automática falhou: $e');
-      _errorMessage = 'Autenticação automática falhou: $e';
     } finally {
       _isAutoLoggingIn = false;
       notifyListeners();
@@ -244,13 +240,12 @@ class AuthProvider with ChangeNotifier {
 
   Future<bool> loginWithChallenge(String username) async {
     _isLoading = true;
-    _errorMessage = '';
     notifyListeners();
 
     try {
       final handshakeSuccess = await _handshakeService.initiateHandshake();
       if (!handshakeSuccess) {
-        _errorMessage = 'Falha no handshake de criptografia';
+       debugPrint('Falha no handshake de criptografia');
         _isLoading = false;
         notifyListeners();
         return false;
@@ -258,7 +253,7 @@ class AuthProvider with ChangeNotifier {
 
       final challengeResponse = await _initiateChallenge(username);
       if (!challengeResponse['success']) {
-        _errorMessage = challengeResponse['message'] ?? 'Erro no desafio';
+        debugPrint(challengeResponse['message'] ?? 'Erro no desafio');
         _isLoading = false;
         notifyListeners();
         return false;
@@ -268,7 +263,7 @@ class AuthProvider with ChangeNotifier {
 
       final signature = await _signChallenge(nonceB64);
       if (signature == null) {
-        _errorMessage = 'Erro ao assinar desafio';
+        debugPrint('Erro ao assinar desafio');
         _isLoading = false;
         notifyListeners();
         return false;
@@ -276,7 +271,7 @@ class AuthProvider with ChangeNotifier {
 
       final verifyResponse = await _verifyChallenge(username, signature);
       if (!verifyResponse['success']) {
-        _errorMessage = verifyResponse['message'] ?? 'Autenticação falhou';
+        debugPrint(verifyResponse['message'] ?? 'Autenticação falhou');
         _isLoading = false;
         notifyListeners();
         return false;
@@ -293,7 +288,6 @@ class AuthProvider with ChangeNotifier {
         debugPrint('Erro crítico: UserId é nulo após login!');
       }
 
-      _errorMessage = '';
       _isLoading = false;
       notifyListeners();
 
@@ -310,7 +304,7 @@ class AuthProvider with ChangeNotifier {
       return true;
     } catch (e) {
       _isLoading = false;
-      _errorMessage = 'Erro na autenticação: $e';
+      debugPrint('Erro na autenticação: $e');
       notifyListeners();
       return false;
     }
@@ -395,12 +389,11 @@ class AuthProvider with ChangeNotifier {
     }
   }
 
-  void logout() {
+  Future<void> logout() async {
     _isLoggedIn = false;
     _userId = null;
     _username = null;
     _localStorageService.clearUserCredentials();
-    dispose();
     notifyListeners();
   }
 

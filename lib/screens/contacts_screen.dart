@@ -89,10 +89,12 @@ class _ContactsScreenState extends State<ContactsScreen> {
         await _localstorage.clearUserCredentials();
         socketService.disconnect();
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          Navigator.of(context).pushNamedAndRemoveUntil(
-            '/login',
-            (Route<dynamic> route) => false,
-          );
+          if (mounted) {
+            Navigator.of(context).pushNamedAndRemoveUntil(
+              '/login',
+              (Route<dynamic> route) => false,
+            );
+          }
         });
       }
     });
@@ -537,7 +539,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
     );
   }
 
-void _showPendingRequestsDialog() {
+  void _showPendingRequestsDialog() {
     showDialog(
       context: context,
       builder: (context) {
@@ -545,7 +547,7 @@ void _showPendingRequestsDialog() {
           builder: (context, setDialogState) {
             return AlertDialog(
               title: const Text('Solicitações Pendentes'),
-              contentPadding: EdgeInsets.zero, 
+              contentPadding: EdgeInsets.zero,
               titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 10),
               content: _pendingRequests.isEmpty
                   ? const Padding(
@@ -562,11 +564,14 @@ void _showPendingRequestsDialog() {
                           String formattedDate = 'Data desconhecida';
                           try {
                             if (request['created_at'] != null) {
-                              DateTime dt = DateTime.parse(request['created_at'].toString());
+                              DateTime dt = DateTime.parse(
+                                  request['created_at'].toString());
                               String hour = dt.hour.toString().padLeft(2, '0');
-                              String minute = dt.minute.toString().padLeft(2, '0');
+                              String minute =
+                                  dt.minute.toString().padLeft(2, '0');
                               String day = dt.day.toString().padLeft(2, '0');
-                              String month = dt.month.toString().padLeft(2, '0');
+                              String month =
+                                  dt.month.toString().padLeft(2, '0');
                               String year = dt.year.toString();
                               formattedDate = "$hour:$minute $day/$month/$year";
                             }
@@ -575,10 +580,13 @@ void _showPendingRequestsDialog() {
                           }
 
                           return ListTile(
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                            contentPadding:
+                                const EdgeInsets.symmetric(horizontal: 12),
                             leading: CircleAvatar(
                               radius: 18,
-                              child: Text(request['sender_username']?[0]?.toUpperCase() ?? '?'),
+                              child: Text(request['sender_username']?[0]
+                                      ?.toUpperCase() ??
+                                  '?'),
                             ),
                             title: Text(
                               request['sender_username'] ?? 'Usuário',
@@ -589,7 +597,7 @@ void _showPendingRequestsDialog() {
                             ),
                             subtitle: Text(
                               'Enviado em: $formattedDate',
-                              style: const TextStyle(fontSize: 10), 
+                              style: const TextStyle(fontSize: 10),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -599,7 +607,8 @@ void _showPendingRequestsDialog() {
                                 IconButton(
                                   padding: EdgeInsets.zero,
                                   constraints: const BoxConstraints(),
-                                  icon: const Icon(Icons.check_circle, color: Colors.green, size: 28),
+                                  icon: const Icon(Icons.check_circle,
+                                      color: Colors.green, size: 28),
                                   onPressed: () async {
                                     await _acceptFriendRequest(
                                         request['sender_id'],
@@ -611,9 +620,11 @@ void _showPendingRequestsDialog() {
                                 IconButton(
                                   padding: EdgeInsets.zero,
                                   constraints: const BoxConstraints(),
-                                  icon: const Icon(Icons.cancel, color: Colors.red, size: 28),
+                                  icon: const Icon(Icons.cancel,
+                                      color: Colors.red, size: 28),
                                   onPressed: () async {
-                                    await _rejectFriendRequest(request['receiver_id']);
+                                    await _rejectFriendRequest(
+                                        request['receiver_id']);
                                     setDialogState(() {});
                                   },
                                 ),
@@ -749,11 +760,12 @@ void _showPendingRequestsDialog() {
           ),
           IconButton(
             icon: const Icon(Icons.logout),
-            onPressed: () {
-              authProvider.logout();
+            onPressed: () async {
+              await authProvider.logout();
+              if (!mounted) return;
               Navigator.of(context).pushNamedAndRemoveUntil(
                 '/login',
-                (Route<dynamic> route) => false,
+                (route) => false,
               );
             },
           ),
@@ -840,11 +852,11 @@ void _showPendingRequestsDialog() {
 
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.all(16),
+        const Padding(
+          padding: EdgeInsets.all(16),
           child: Text(
-            'Meus Amigos (${_friends.length})',
-            style: const TextStyle(
+            'Meus Amigos',
+            style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
               color: Colors.blue,

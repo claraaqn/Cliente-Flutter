@@ -322,7 +322,7 @@ class SocketService {
   Future<Map<String, dynamic>> handshakeFriends(
       int senderId, String receiverPub, int reciverId, int idFriendship) async {
     debugPrint('Começando HandShake');
-    //! refatorar 
+    //! refatorar
 
     _localStorage.saveFriendPublicKey(reciverId, receiverPub);
 
@@ -363,7 +363,7 @@ class SocketService {
 
     debugPrint('Handshake realizado - Chaves de sessão geradas');
     _friendSessionManager.resetSession(idFriendship);
-     //! refatorar 
+    //! refatorar
 
     return _sendAndWaitForResponse({
       "action": "handshake_complete",
@@ -411,7 +411,6 @@ class SocketService {
         }
       }
     }
-    // 1. Validações Básicas
     if (!_isAuthenticated()) {
       return {'success': false, 'message': 'Usuário não autenticado'};
     }
@@ -466,7 +465,6 @@ class SocketService {
         'id_friendship': idFriendship,
       };
 
-      // 4. CAMADA 1: Criptografia de Amigo (Ponta-a-Ponta)
       bool friendReady = await ensureSessionReady(idFriendship);
       _friendSessionManager.incrementMessageCount(idFriendship);
 
@@ -485,30 +483,13 @@ class SocketService {
             "Chaves de amigo não encontradas. Enviando conteúdo legível para o servidor.");
       }
 
-      // 5. CAMADA 2: Criptografia de Servidor (Túnel)
-      final Map<String, dynamic> messageToSend;
+      final Map<String, dynamic> messageToSend = plainMessage;
 
-      if (_isEncryptionEnabled) {
-        _handshakeService?.sessionManager.incrementMessageCount();
-
-        final encryptedPacket =
-            await _crypto.encryptMessage(json.encode(plainMessage));
-        messageToSend = {
-          'action': 'encrypted_message',
-          ...encryptedPacket,
-        };
-      } else {
-        // Fallback: Se não houver nem criptografia de servidor (raro)
-        messageToSend = plainMessage;
-      }
-
-      // 6. Envio
       final response = await _sendAndWaitForResponse(
         messageToSend,
         'send_message_response',
       );
 
-      // 7. Processa Resposta
       if (response['success'] == true) {
         final messageId = response['data']['message_id'];
         final isOffline = response['data']['is_offline'] == true;
@@ -680,15 +661,24 @@ class SocketService {
     Duration timeout = defaultTimeout,
   }) async {
     if (!_isConnected && !await connect()) {
-      return {
-        'success': false,
-        'message': 'Não foi possível conectar ao servidor TCP',
-      };
+      return {'success': false, 'message': 'Não foi possível conectar'};
     }
 
     try {
-      final jsonMessage = '${json.encode(message)}\n';
-      _socket!.write(jsonMessage);
+      String payload;
+      if (_isEncryptionEnabled && message['action'] != 'handshake_init') {
+        final encryptedData =
+            await _messageCrypto.encryptMessage(json.encode(message));
+        payload = '${json.encode({
+              'action': 'encrypted_message',
+              'ciphertext': encryptedData['ciphertext'],
+              'hmac': encryptedData['hmac'],
+            })}\n';
+      } else {
+        payload = '${json.encode(message)}\n';
+      }
+
+      _socket!.write(payload);
 
       final response = await _messageController.stream
           .firstWhere(
@@ -707,13 +697,21 @@ class SocketService {
     }
   }
 
-  void sendMessageFriend(Map<String, dynamic> message) {
+  void sendMessageFriend(Map<String, dynamic> message) async {
     if (_socket != null) {
-      debugPrint("Enviando ação: ${message['action']}");
-      _socket!.write('${json.encode(message)}\n');
-    } else {
-      debugPrint(
-          "Erro: Socket desconectado ao tentar enviar ${message['action']}");
+      String payload;
+      if (_isEncryptionEnabled) {
+        final encryptedData =
+            await _messageCrypto.encryptMessage(json.encode(message));
+        payload = '${json.encode({
+              'action': 'encrypted_message',
+              'ciphertext': encryptedData['ciphertext'],
+              'hmac': encryptedData['hmac'],
+            })}\n';
+      } else {
+        payload = '${json.encode(message)}\n';
+      }
+      _socket!.write(payload);
     }
   }
 
