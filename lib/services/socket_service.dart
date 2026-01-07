@@ -278,6 +278,12 @@ class SocketService {
     }
   }
 
+  Future<Map<String, dynamic>> logout() async {
+    return _sendAndWaitForResponse({
+      'action': 'logout',
+    }, 'logout_completo');
+  }
+
   //? funciona - amizade
   Future<Map<String, dynamic>> sendFriendRequest(
       String friendUsername, int userId) async {

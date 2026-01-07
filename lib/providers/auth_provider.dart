@@ -91,7 +91,7 @@ class AuthProvider with ChangeNotifier {
       }
     } catch (e) {
       _isLoading = false;
-     debugPrint('Erro de conexão: $e');
+      debugPrint('Erro de conexão: $e');
       notifyListeners();
       return false;
     } finally {
@@ -107,7 +107,7 @@ class AuthProvider with ChangeNotifier {
     try {
       final handshakeSuccess = await _handshakeService.initiateHandshake();
       if (!handshakeSuccess) {
-       debugPrint('Falha no handshake');
+        debugPrint('Falha no handshake');
         _isLoading = false;
         notifyListeners();
         return false;
@@ -149,7 +149,7 @@ class AuthProvider with ChangeNotifier {
                 debugPrint(
                     "Novas chaves geradas e sincronizadas com o servidor.");
               } else {
-               debugPrint("Falha ao registrar novo dispositivo.");
+                debugPrint("Falha ao registrar novo dispositivo.");
                 _isLoading = false;
                 notifyListeners();
                 return false;
@@ -245,7 +245,7 @@ class AuthProvider with ChangeNotifier {
     try {
       final handshakeSuccess = await _handshakeService.initiateHandshake();
       if (!handshakeSuccess) {
-       debugPrint('Falha no handshake de criptografia');
+        debugPrint('Falha no handshake de criptografia');
         _isLoading = false;
         notifyListeners();
         return false;
@@ -390,6 +390,7 @@ class AuthProvider with ChangeNotifier {
   }
 
   Future<void> logout() async {
+    _socketService.logout();
     _isLoggedIn = false;
     _userId = null;
     _username = null;
